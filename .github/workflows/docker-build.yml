@@ -3,6 +3,8 @@ name: Docker Build and Push
 on:
   pull_request:
     branches: [ "main" ]
+  push:
+    branches: [ "main" ]
 
 env:
   DOCKERHUB_USERNAME: ninesun0318
