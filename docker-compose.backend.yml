@@ -1,0 +1,21 @@
+version: "3.9"
+
+services:
+  op-admin-backend:
+    image: myysophia/op-admin-system-backend:latest
+    container_name: op-admin-backend
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    command: >
+      uvicorn app.main:app
+      --host 0.0.0.0
+      --port 8000
+    ports:
+      - "8000:8000"
+    networks:
+      - memefans-net
+
+networks:
+  memefans-net:
+    external: true
