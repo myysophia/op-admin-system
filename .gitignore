@@ -1,0 +1,57 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+
+# Environment variables
+*.env
+*.env.local
+
+# Python packaging
+build/
+dist/
+*.egg-info/
+
+# Logs and reports
+logs/
+*.log
+coverage.xml
+.coverage*
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# IDE / Editor settings
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Cache
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Docker artifacts
+**/docker-data/
+
+# Node / Frontend artifacts
+frontend/node_modules/
+frontend/.next/
+frontend/dist/
+
+# Alembic
+alembic/versions/*.pyc
+
+# Misc
+.python-version
+backend/docs/*
+picture/*
+sql/*.sql

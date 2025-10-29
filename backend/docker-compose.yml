@@ -1,0 +1,56 @@
+version: '3.8'
+
+services:
+  # Backend API
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: op-admin-backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - LOG_LEVEL=INFO
+      - DATABASE_URL=${DATABASE_URL}
+      - KAFKA_BOOTSTRAP_SERVERS=${KAFKA_BOOTSTRAP_SERVERS}
+      - NOTIFICATION_API_URL=${NOTIFICATION_API_URL}
+    volumes:
+      - ./logs:/app/logs
+    depends_on:
+      - redis
+    networks:
+      - op-admin-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Redis (for caching and sessions)
+  redis:
+    image: redis:7-alpine
+    container_name: op-admin-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - op-admin-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  op-admin-network:
+    driver: bridge
+
+volumes:
+  redis-data:
+    driver: local

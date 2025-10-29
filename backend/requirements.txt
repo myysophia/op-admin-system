@@ -1,0 +1,39 @@
+# ================================================
+# OP Admin System - Core Dependencies
+# ================================================
+
+# Web Framework
+fastapi==0.110.0
+uvicorn[standard]==0.29.0
+python-multipart==0.0.9
+
+# Data Validation & Config
+pydantic==2.8.0
+pydantic-settings==2.5.2
+python-dotenv==1.0.1
+
+# Database (PostgreSQL Async)
+sqlalchemy==2.0.29
+asyncpg==0.30.0
+alembic==1.13.1
+
+# Kafka Integration (Meme Review)
+aiokafka==0.10.0
+
+# HTTP Client (Notifications & OpenIM)
+httpx==0.26.0
+
+# Date & Time Utilities
+python-dateutil==2.9.0.post0
+
+# ================================================
+# Optional Dependencies (for future features)
+# ================================================
+
+# JWT Authentication (TODO: Implement)
+#python-jose[cryptography]==3.3.0
+#passlib[bcrypt]==1.7.4
+
+# Redis (TODO: Use for Kafka queue persistence)
+#redis==5.0.1
+#hiredis==2.2.3
