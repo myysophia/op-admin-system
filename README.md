@@ -1,11 +1,10 @@
-# OP Admin System (OP后台运营管理系统)
+# OP Admin System
 
 A comprehensive operation platform for managing app users, reviewing memes, and providing customer support.
 
 ## Overview
 
 This system provides a centralized platform for operations team to:
-- Manage 20,000+ app users
 - Review and moderate user-created memes
 - Handle customer support conversations in real-time
 - Adjust content weights and priorities
@@ -43,17 +42,9 @@ This system provides a centralized platform for operations team to:
 - **WebSocket**: Native FastAPI support
 - **Messaging**: OpenIM integration
 
-### Frontend
-- **Framework**: React 18
-- **Language**: TypeScript 5
-- **UI Library**: Ant Design 5
-- **State Management**: Redux Toolkit
-- **Data Fetching**: React Query
-- **Routing**: React Router 6
-
 ## Features
 
-### 1. User Management (用户管理)
+### 1. User Management 
 - **User List**: Search and filter across multiple fields (UID, username, email, wallet address, etc.)
 - **User Details**: View comprehensive user information including:
   - Profile data (username, display name, email, wallet, etc.)
@@ -67,23 +58,23 @@ This system provides a centralized platform for operations team to:
   - Detailed reason logging
 - **Audit Trail**: Complete history of all ban/unban operations
 
-### 2. Operations (运营管理)
+### 2. Operations 
 
-#### Meme Review (审核管理)
+#### Meme Review 
 - Review user-created memes
 - Approve or reject with comments
 - Automatic status updates (pending → approved/rejected)
 - User notifications via OpenIM
 - Complete review history
 
-#### Post Weight Management (权重调整)
+#### Post Weight Management 
 - View all posts with current weights
 - Create new posts with URL validation
 - Adjust post weights to control visibility
 - Track weight adjustment history
 - Reason logging for each adjustment
 
-### 3. Support (客服系统)
+### 3. Support 
 - **Real-time Chat**: WebSocket-based instant messaging
 - **Conversation Management**:
   - Pending: New user messages awaiting response
@@ -98,7 +89,7 @@ This system provides a centralized platform for operations team to:
 
 ### Prerequisites
 - Docker & Docker Compose (recommended)
-- OR: Python 3.11+, Node.js 18+, PostgreSQL 15, Redis 7
+- OR: Python 3.11+, PostgreSQL 14, Redis 7
 
 ### Option 1: Docker (Recommended)
 
@@ -111,7 +102,6 @@ cd op-admin-system
 # Choose option 1 for Docker
 
 # Access the application
-# - Frontend: http://localhost:3000
 # - Backend API: http://localhost:8000
 # - API Docs: http://localhost:8000/api/docs
 ```
@@ -222,7 +212,6 @@ The system uses PostgreSQL with the following main tables:
 - **quick_replies**: Quick reply templates
 - **operator_audit_logs**: All operator actions
 
-See [TECHNICAL_DESIGN.md](TECHNICAL_DESIGN.md) for detailed schema.
 
 ## Configuration
 
@@ -401,14 +390,10 @@ docker-compose exec backend /bin/bash
 ## Support
 
 For technical questions and design details, see:
-- [TECHNICAL_DESIGN.md](TECHNICAL_DESIGN.md) - Complete technical specification
 - [backend/README.md](backend/README.md) - Backend documentation
-- [frontend/README.md](frontend/README.md) - Frontend documentation
 
 ## References
 
-- Design Document: https://www.notion.so/hipasus/OP-v1-0-27d7712746258091bbd5c9e12aeac7b2
-- Screenshots: See `*.jpg` files in project root
 
 ## License
 
