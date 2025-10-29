@@ -16,10 +16,6 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
-    env:
-      REGISTRY: docker.io
-      IMAGE_NAME: myysophia/op-admin-system-backend
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -37,7 +33,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/op-backend
           tags: |
             type=ref,event=branch
             type=ref,event=tag
