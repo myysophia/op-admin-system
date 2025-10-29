@@ -1,26 +1,32 @@
 """User service layer - adapted for existing database schema."""
 from datetime import datetime, timedelta
 from typing import Optional
-from sqlalchemy import select, or_, and_, func
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload, joinedload
+import uuid
+
 from fastapi import HTTPException
-from app.models.user import User, Author, UserWallet, Ban
+from sqlalchemy import and_, func, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from app.config import settings
+from app.models.user import Author, Ban, User, UserWallet
+from app.models.ban_history import BanHistory
 from app.schemas.user import (
-    UserSearchParams,
-    UserListResponse,
-    UserDetailResponse,
-    UserResponse,
     AuthorResponse,
-    WalletResponse,
+    BanHistoryItem,
+    BanHistoryListResponse,
     BanRequest,
     UnbanRequest,
-    BanResponse,
-    UserUpdate
+    UserDetailResponse,
+    UserListItemResponse,
+    UserListResponse,
+    UserResponse,
+    UserSearchParams,
+    UserUpdate,
+    WalletResponse,
 )
-from app.services.notification_service import notification_service
 from app.services.audit_service import AuditService
-import uuid
+from app.services.notification_service import notification_service
 
 
 class UserService:
@@ -30,6 +36,17 @@ class UserService:
         self.db = db
         self.notification_service = notification_service
         self.audit_service = AuditService(db)
+        self.default_operator_id = settings.DEFAULT_OPERATOR_ID
+
+    def _resolve_operator_id(self, preferred_id: Optional[str]) -> str:
+        """Return operator identifier for audit/history (does not require DB lookup)."""
+        candidates = [preferred_id, self.default_operator_id]
+
+        for candidate in candidates:
+            if candidate:
+                return candidate
+
+        raise HTTPException(status_code=500, detail="No operator id provided; please configure DEFAULT_OPERATOR_ID")
 
     async def get_users(self, params: UserSearchParams) -> UserListResponse:
         """Get user list with search and pagination - joining users, authors, and wallets."""
@@ -99,32 +116,22 @@ class UserService:
         users = result.scalars().all()
 
         # Build response
-        items = []
+        items: list[UserListItemResponse] = []
         for user in users:
-            # Get active bans
-            active_bans = [
-                BanResponse(
-                    id=ban.id,
-                    user_id=ban.user_id,
-                    reason=ban.reason,
-                    ends_at=ban.ends_at,
-                    imposed_by=ban.imposed_by,
-                    revoked_at=ban.revoked_at,
-                    revoked_by=ban.revoked_by,
-                    revoke_reason=ban.revoke_reason,
-                    created_at=ban.created_at,
-                    is_active=(ban.revoked_at is None and (ban.ends_at is None or ban.ends_at > datetime.utcnow()))
-                )
-                for ban in user.bans
-                if ban.revoked_at is None and (ban.ends_at is None or ban.ends_at > datetime.utcnow())
-            ]
+            wallet_models = [WalletResponse.model_validate(w) for w in user.wallets]
+            bsc_wallet = next((w.pubkey for w in wallet_models if w.type == "bsc"), None)
 
-            items.append(UserDetailResponse(
-                user=UserResponse.model_validate(user),
-                author=AuthorResponse.model_validate(user.author) if user.author else None,
-                wallets=[WalletResponse.model_validate(w) for w in user.wallets],
-                active_bans=active_bans
-            ))
+            items.append(
+                UserListItemResponse(
+                    user_id=user.id,
+                    username=user.author.username if user.author else None,
+                    created_at=user.created_at,
+                    bsc_wallet=bsc_wallet,
+                    email=user.author.email if user.author else None,
+                    phone_number=user.author.phone_number if user.author else None,
+                    status=user.status,
+                )
+            )
 
         return UserListResponse(
             items=items,
@@ -138,7 +145,6 @@ class UserService:
         query = select(User).where(User.id == user_id).options(
             selectinload(User.author),
             selectinload(User.wallets),
-            selectinload(User.bans)
         )
         result = await self.db.execute(query)
         user = result.scalar_one_or_none()
@@ -146,30 +152,36 @@ class UserService:
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
 
-        # Get active bans
-        active_bans = [
-            BanResponse(
-                id=ban.id,
-                user_id=ban.user_id,
-                reason=ban.reason,
-                ends_at=ban.ends_at,
-                imposed_by=ban.imposed_by,
-                revoked_at=ban.revoked_at,
-                revoked_by=ban.revoked_by,
-                revoke_reason=ban.revoke_reason,
-                created_at=ban.created_at,
-                is_active=(ban.revoked_at is None and (ban.ends_at is None or ban.ends_at > datetime.utcnow()))
-            )
-            for ban in user.bans
-            if ban.revoked_at is None
-        ]
+        wallet_models = [WalletResponse.model_validate(w) for w in user.wallets]
 
         return UserDetailResponse(
             user=UserResponse.model_validate(user),
             author=AuthorResponse.model_validate(user.author) if user.author else None,
-            wallets=[WalletResponse.model_validate(w) for w in user.wallets],
-            active_bans=active_bans
+            wallets=wallet_models,
         )
+
+    async def get_ban_history(
+        self,
+        user_id: str,
+        page: int,
+        page_size: int,
+    ) -> BanHistoryListResponse:
+        if page < 1 or page_size < 1:
+            raise HTTPException(status_code=400, detail="Invalid pagination parameters")
+
+        query = select(BanHistory).where(BanHistory.user_id == user_id)
+        count_stmt = select(func.count()).select_from(query.subquery())
+        total = await self.db.scalar(count_stmt) or 0
+
+        stmt = (
+            query.order_by(BanHistory.created_at.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+        result = await self.db.execute(stmt)
+        items = [BanHistoryItem.model_validate(row) for row in result.scalars().all()]
+
+        return BanHistoryListResponse(items=items, total=total)
 
     async def update_user(self, user_id: str, user_data: UserUpdate) -> UserResponse:
         """Update mutable user fields."""
@@ -239,16 +251,29 @@ class UserService:
         if ban_data.duration:
             ends_at = datetime.utcnow() + timedelta(seconds=ban_data.duration)
 
+        resolved_operator_id = self._resolve_operator_id(operator_id)
+
         # Create ban record
         ban = Ban(
             id=str(uuid.uuid4()),
             user_id=user_id,
             reason=ban_data.reason,
             ends_at=ends_at,
-            imposed_by=operator_id,
+            imposed_by=resolved_operator_id,
             created_at=datetime.utcnow()
         )
         self.db.add(ban)
+
+        # Record history entry within same transaction
+        history_entry = BanHistory(
+            user_id=user_id,
+            action="ban",
+            reason=ban_data.reason,
+            duration_seconds=ban_data.duration,
+            operator_id=resolved_operator_id,
+            created_at=datetime.utcnow()
+        )
+        self.db.add(history_entry)
 
         # Update user status to 'banned'
         user.status = "banned"
@@ -271,7 +296,7 @@ class UserService:
 
         # Audit log
         await self.audit_service.log_action(
-            operator_id=operator_id,
+            operator_id=resolved_operator_id,
             action_type="ban_user",
             target_type="user",
             target_id=user_id,
@@ -311,12 +336,24 @@ class UserService:
         if not active_bans:
             raise HTTPException(status_code=400, detail="User has no active bans")
 
+        resolved_operator_id = self._resolve_operator_id(operator_id)
+
         # Revoke all active bans
         unban_reason = unban_data.reason if unban_data and unban_data.reason else "Unbanned by operator"
         for ban in active_bans:
             ban.revoked_at = datetime.utcnow()
-            ban.revoked_by = operator_id
+            ban.revoked_by = resolved_operator_id
             ban.revoke_reason = unban_reason
+
+            history_entry = BanHistory(
+                user_id=user_id,
+                action="unban",
+                reason=unban_reason,
+                duration_seconds=None,
+                operator_id=resolved_operator_id,
+                created_at=datetime.utcnow(),
+            )
+            self.db.add(history_entry)
 
         # Update user status to 'active'
         user.status = "active"
@@ -338,7 +375,7 @@ class UserService:
 
         # Audit log
         await self.audit_service.log_action(
-            operator_id=operator_id,
+            operator_id=resolved_operator_id,
             action_type="unban_user",
             target_type="user",
             target_id=user_id,

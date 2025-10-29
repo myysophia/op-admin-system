@@ -64,6 +64,16 @@ class Settings(BaseSettings):
     POST_WEIGHT_API_URL: Optional[str] = None
     POST_WEIGHT_API_TOKEN: Optional[str] = None
 
+    # Documentation
+    DOCS_DEFAULT_TOKEN: Optional[str] = (
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
+        "eyJzdWIiOiJCaFYwREpyMGRMMCIsImF1ZCI6WyJmYXN0YXBpLXVzZXJzOmF1dGgiXSwiaWF0IjoxNzYxNjQyMDg3LCJleHAiOjE3NjE4NTgwODd9."
+        "CP8uqwMORMkHO6CrDiYOsR7xqUUuracaGm04TyHoUNY"
+    )
+
+    # Operator fallback (used before auth is integrated)
+    DEFAULT_OPERATOR_ID: Optional[str] = None
+
     class Config:
         env_file = ".env"
         case_sensitive = True

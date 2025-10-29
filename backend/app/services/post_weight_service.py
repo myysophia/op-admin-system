@@ -181,11 +181,13 @@ class PostWeightService:
         if settings.POST_WEIGHT_API_TOKEN:
             headers["X-Token"] = settings.POST_WEIGHT_API_TOKEN
 
+        payload = {"post_ids": post_ids}
+
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.post(
                     settings.POST_WEIGHT_API_URL,
-                    json={"post_ids": post_ids},
+                    json=payload,
                     headers=headers,
                 )
 
@@ -193,11 +195,16 @@ class PostWeightService:
                 await self.db.rollback()
                 raise HTTPException(
                     status_code=502,
-                    detail=f"推荐系统返回异常状态: {response.status_code}, body={response.text}",
+                    detail=(
+                        f"推荐系统返回异常状态: {response.status_code}, body={response.text}, payload={payload}"
+                    ),
                 )
 
         except HTTPException:
             raise
         except Exception as exc:
             await self.db.rollback()
-            raise HTTPException(status_code=502, detail=f"推荐系统调用失败: {exc}") from exc
+            raise HTTPException(
+                status_code=502,
+                detail=f"推荐系统调用失败: {exc}, payload={payload}"
+            ) from exc

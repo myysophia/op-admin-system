@@ -4,6 +4,7 @@ from app.models.post import Post, Image, Video, Collection, Pair
 from app.models.post_weight import PostWeight
 from app.models.support import SupportConversation, QuickReply
 from app.models.audit import OperatorAuditLog
+from app.models.ban_history import BanHistory
 
 __all__ = [
     # User models
@@ -24,4 +25,5 @@ __all__ = [
     "SupportConversation",
     "QuickReply",
     "OperatorAuditLog",
+    "BanHistory",
 ]

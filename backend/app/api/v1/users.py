@@ -7,6 +7,8 @@ from app.schemas.user import (
     UserResponse,
     UserDetailResponse,
     UserListResponse,
+    UserListItemResponse,
+    BanHistoryListResponse,
     UserUpdate,
     BanUserRequest,
     UnbanUserRequest,
@@ -14,6 +16,7 @@ from app.schemas.user import (
 )
 from app.schemas.common import Response
 from app.services.user_service import UserService
+from app.config import settings
 
 router = APIRouter()
 
@@ -86,6 +89,19 @@ async def get_user_detail(
     return Response(data=user)
 
 
+@router.get("/users/{uid}/ban-history", response_model=Response[BanHistoryListResponse])
+async def get_user_ban_history(
+    uid: str = Path(..., description="User ID"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get ban/unban history for a user."""
+    user_service = UserService(db)
+    history = await user_service.get_ban_history(uid, page, page_size)
+    return Response(data=history)
+
+
 @router.put("/users/{uid}", response_model=Response[UserResponse])
 async def update_user(
     uid: str = Path(..., description="User ID (e.g., 'BhqB31UxCNa')"),
@@ -119,7 +135,9 @@ async def ban_user(
 
     After banning, user's status will be set to 'banned'.
     """
-    operator_id = "admin"  # TODO: Get from Bearer token
+    operator_id = settings.DEFAULT_OPERATOR_ID
+    if not operator_id:
+        raise HTTPException(status_code=500, detail="DEFAULT_OPERATOR_ID not configured")
 
     user_service = UserService(db)
     await user_service.ban_user(uid, ban_data, operator_id)
@@ -143,7 +161,9 @@ async def unban_user(
 
     After unbanning, user's status will be set to 'active'.
     """
-    operator_id = "admin"  # TODO: Get from Bearer token
+    operator_id = settings.DEFAULT_OPERATOR_ID
+    if not operator_id:
+        raise HTTPException(status_code=500, detail="DEFAULT_OPERATOR_ID not configured")
 
     user_service = UserService(db)
     await user_service.unban_user(uid, unban_data, operator_id)

@@ -37,6 +37,14 @@ class NotificationService:
 
         payload_meta = dict(meta or {})  # copy to avoid mutating caller
 
+        payload = {
+            "recipients_ids": recipients_ids,
+            "notification_base": {
+                "type": notification_type,
+                "meta": payload_meta
+            }
+        }
+
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
@@ -45,34 +53,54 @@ class NotificationService:
                         "accept": "application/json",
                         "Content-Type": "application/json"
                     },
-                    json={
-                        "recipients_ids": recipients_ids,
-                        "notification_base": {
-                            "type": notification_type,
-                            "meta": payload_meta
-                        }
-                    },
+                    json=payload,
                     timeout=self.timeout
                 )
 
                 if response.status_code == 200:
                     logger.info(
-                        f"Notification sent successfully: type={notification_type}, "
-                        f"recipients={len(recipients_ids)}"
+                        "Notification sent successfully",
+                        extra={
+                            "notification_type": notification_type,
+                            "recipients": recipients_ids,
+                            "payload": payload
+                        }
                     )
                     return True
                 else:
                     logger.error(
-                        f"Failed to send notification: status={response.status_code}, "
-                        f"response={response.text}"
+                        "Failed to send notification",
+                        extra={
+                            "notification_type": notification_type,
+                            "recipients": recipients_ids,
+                            "payload": payload,
+                            "status_code": response.status_code,
+                            "response_body": response.text
+                        }
                     )
                     return False
 
         except httpx.TimeoutException:
-            logger.error(f"Notification API timeout after {self.timeout}s")
+            logger.error(
+                "Notification API timeout",
+                extra={
+                    "notification_type": notification_type,
+                    "recipients": recipients_ids,
+                    "payload": payload,
+                    "timeout": self.timeout
+                }
+            )
             return False
         except Exception as e:
-            logger.error(f"Error sending notification: {e}")
+            logger.error(
+                "Error sending notification",
+                extra={
+                    "notification_type": notification_type,
+                    "recipients": recipients_ids,
+                    "payload": payload,
+                    "error": str(e)
+                }
+            )
             return False
 
     async def send_meme_approved_notification(

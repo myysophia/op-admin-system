@@ -1,17 +1,27 @@
 """User schemas - matching actual database structure."""
 from datetime import datetime, date
 from typing import Optional, List
-from pydantic import BaseModel, Field, EmailStr
+from pydantic import BaseModel, Field, field_validator
 
 
 # User schemas
 class UserBase(BaseModel):
-    email: Optional[EmailStr] = None
+    email: Optional[str] = None
     phone_number: Optional[str] = None
     status: str
     region: Optional[str] = None
     is_active: bool
     is_verified: bool
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, value):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        return value
 
 
 class UserResponse(UserBase):
@@ -63,11 +73,10 @@ class WalletResponse(BaseModel):
 
 # Combined user detail response
 class UserDetailResponse(BaseModel):
-    """Complete user information with author and wallet."""
+    """User detail data."""
     user: UserResponse
     author: Optional[AuthorResponse] = None
     wallets: List[WalletResponse] = Field(default_factory=list)
-    active_bans: List["BanResponse"] = Field(default_factory=list)
 
 
 # Ban schemas
@@ -133,7 +142,7 @@ class UserSearchParams(BaseModel):
 
 
 class UserListResponse(BaseModel):
-    items: List[UserDetailResponse]
+    items: List["UserListItemResponse"]
     total: int
     page: int
     page_size: int
@@ -156,3 +165,35 @@ class BanUserRequest(BanRequest):
 
 class UnbanUserRequest(UnbanRequest):
     """Backward-compatible alias for unban request schema."""
+
+
+class UserListItemResponse(BaseModel):
+    """Lightweight user list item."""
+
+    user_id: str
+    username: Optional[str] = None
+    created_at: Optional[datetime] = None
+    bsc_wallet: Optional[str] = None
+    email: Optional[str] = None
+    phone_number: Optional[str] = None
+    status: str
+
+
+UserListResponse.model_rebuild()
+
+
+class BanHistoryItem(BaseModel):
+    id: int
+    action: str
+    reason: Optional[str] = None
+    duration_seconds: Optional[int] = None
+    operator_id: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class BanHistoryListResponse(BaseModel):
+    items: List[BanHistoryItem]
+    total: int

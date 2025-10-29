@@ -103,13 +103,11 @@ class Ban(Base):
     user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"), nullable=False, index=True)
     reason: Mapped[Optional[str]] = mapped_column(Text)
     ends_at: Mapped[Optional[datetime]] = mapped_column(DateTime)  # NULL means permanent
-    imposed_by: Mapped[str] = mapped_column(String, ForeignKey("users.id"), nullable=False)
+    imposed_by: Mapped[str] = mapped_column(String, nullable=False)
     revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
-    revoked_by: Mapped[Optional[str]] = mapped_column(String, ForeignKey("users.id"))
+    revoked_by: Mapped[Optional[str]] = mapped_column(String)
     revoke_reason: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
     # Relationships
     user = relationship("User", foreign_keys=[user_id], back_populates="bans")
-    imposer = relationship("User", foreign_keys=[imposed_by])
-    revoker = relationship("User", foreign_keys=[revoked_by])
