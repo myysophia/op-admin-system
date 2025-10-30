@@ -125,6 +125,7 @@ class UserService:
                 UserListItemResponse(
                     user_id=user.id,
                     username=user.author.username if user.author else None,
+                    display_name=user.author.name if user.author else None,
                     created_at=user.created_at,
                     bsc_wallet=bsc_wallet,
                     email=user.author.email if user.author else None,

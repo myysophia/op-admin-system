@@ -172,6 +172,7 @@ class UserListItemResponse(BaseModel):
 
     user_id: str
     username: Optional[str] = None
+    display_name: Optional[str] = None
     created_at: Optional[datetime] = None
     bsc_wallet: Optional[str] = None
     email: Optional[str] = None
