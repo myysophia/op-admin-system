@@ -37,19 +37,13 @@ class UserService:
         self.db = db
         self.notification_service = notification_service
         self.audit_service = AuditService(db)
-        self.default_operator_id = settings.DEFAULT_OPERATOR_ID
         self.uid_salt = settings.AGORA_UID_SALT or "JyzuC2!EPq8@EvF-zdqjdsh6NTpkr_nz"
         self.MAX_UID = 2_147_483_647
 
     def _resolve_operator_id(self, preferred_id: Optional[str]) -> str:
-        """Return operator identifier for audit/history (does not require DB lookup)."""
-        candidates = [preferred_id, self.default_operator_id]
-
-        for candidate in candidates:
-            if candidate:
-                return candidate
-
-        raise HTTPException(status_code=500, detail="No operator id provided; please configure DEFAULT_OPERATOR_ID")
+        if preferred_id:
+            return preferred_id
+        raise HTTPException(status_code=401, detail="Operator id not provided")
 
     def _generate_agora_uid(self, user_id: str) -> int:
         """Generate deterministic Agora UID."""
@@ -222,7 +216,7 @@ class UserService:
 
         return BanHistoryListResponse(items=items, total=total)
 
-    async def update_user(self, user_id: str, user_data: UserUpdate) -> UserResponse:
+    async def update_user(self, user_id: str, user_data: UserUpdate, operator_id: str) -> UserResponse:
         """Update mutable user fields."""
         payload = user_data.model_dump(exclude_unset=True)
 
@@ -244,8 +238,10 @@ class UserService:
         await self.db.refresh(user)
 
         # Audit log
+        resolved_operator_id = self._resolve_operator_id(operator_id)
+
         await self.audit_service.log_action(
-            operator_id="admin",  # TODO: replace with authenticated operator
+            operator_id=resolved_operator_id,
             action_type="update_user",
             target_type="user",
             target_id=user_id,

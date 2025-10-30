@@ -83,7 +83,7 @@ class PostWeightService:
         }
 
         now = datetime.utcnow()
-        operator = payload.operator or operator_id or "admin"
+        operator = payload.operator or operator_id
 
         affected_records: List[PostWeight] = []
 

@@ -16,7 +16,7 @@ from app.schemas.user import (
 )
 from app.schemas.common import Response
 from app.services.user_service import UserService
-from app.config import settings
+from app.auth import get_operator_id
 
 router = APIRouter()
 
@@ -106,6 +106,7 @@ async def get_user_ban_history(
 async def update_user(
     uid: str = Path(..., description="User ID (e.g., 'BhqB31UxCNa')"),
     user_data: UserUpdate = None,
+    operator_id: str = Depends(get_operator_id),
     db: AsyncSession = Depends(get_db),
 ):
     """Update user information."""
@@ -113,7 +114,7 @@ async def update_user(
         raise HTTPException(status_code=400, detail="No update payload provided")
 
     user_service = UserService(db)
-    user = await user_service.update_user(uid, user_data)
+    user = await user_service.update_user(uid, user_data, operator_id)
     return Response(data=user, message="User updated successfully")
 
 
@@ -122,8 +123,8 @@ async def ban_user(
     uid: str = Path(..., description="User ID"),
     ban_data: BanUserRequest = None,
     role: str = Query("write", description="Operation role"),
+    operator_id: str = Depends(get_operator_id),
     db: AsyncSession = Depends(get_db),
-    # operator_id: str = Depends(get_current_user),  # TODO: Add auth from Bearer token
 ):
     """
     Ban user account.
@@ -135,10 +136,6 @@ async def ban_user(
 
     After banning, user's status will be set to 'banned'.
     """
-    operator_id = settings.DEFAULT_OPERATOR_ID
-    if not operator_id:
-        raise HTTPException(status_code=500, detail="DEFAULT_OPERATOR_ID not configured")
-
     user_service = UserService(db)
     await user_service.ban_user(uid, ban_data, operator_id)
 
@@ -150,8 +147,8 @@ async def unban_user(
     uid: str = Path(..., description="User ID"),
     unban_data: UnbanUserRequest = None,
     role: str = Query("write", description="Operation role"),
+    operator_id: str = Depends(get_operator_id),
     db: AsyncSession = Depends(get_db),
-    # operator_id: str = Depends(get_current_user),  # TODO: Add auth from Bearer token
 ):
     """
     Unban user account.
@@ -161,10 +158,6 @@ async def unban_user(
 
     After unbanning, user's status will be set to 'active'.
     """
-    operator_id = settings.DEFAULT_OPERATOR_ID
-    if not operator_id:
-        raise HTTPException(status_code=500, detail="DEFAULT_OPERATOR_ID not configured")
-
     user_service = UserService(db)
     await user_service.unban_user(uid, unban_data, operator_id)
 
