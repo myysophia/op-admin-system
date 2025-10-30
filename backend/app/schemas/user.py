@@ -77,6 +77,11 @@ class UserDetailResponse(BaseModel):
     user: UserResponse
     author: Optional[AuthorResponse] = None
     wallets: List[WalletResponse] = Field(default_factory=list)
+    im_id: Optional[str] = None
+    role: Optional[str] = None
+    agora_id: Optional[int] = None
+    app_version: Optional[str] = None
+    yidun_task_id: Optional[str] = None
 
 
 # Ban schemas

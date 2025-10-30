@@ -74,6 +74,9 @@ class Settings(BaseSettings):
     # Operator fallback (used before auth is integrated)
     DEFAULT_OPERATOR_ID: Optional[str] = None
 
+    # Agora UID generation
+    AGORA_UID_SALT: Optional[str] = None
+
     class Config:
         env_file = ".env"
         case_sensitive = True

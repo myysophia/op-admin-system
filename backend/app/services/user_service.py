@@ -2,9 +2,10 @@
 from datetime import datetime, timedelta
 from typing import Optional
 import uuid
+import zlib
 
 from fastapi import HTTPException
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -37,6 +38,8 @@ class UserService:
         self.notification_service = notification_service
         self.audit_service = AuditService(db)
         self.default_operator_id = settings.DEFAULT_OPERATOR_ID
+        self.uid_salt = settings.AGORA_UID_SALT or "JyzuC2!EPq8@EvF-zdqjdsh6NTpkr_nz"
+        self.MAX_UID = 2_147_483_647
 
     def _resolve_operator_id(self, preferred_id: Optional[str]) -> str:
         """Return operator identifier for audit/history (does not require DB lookup)."""
@@ -47,6 +50,13 @@ class UserService:
                 return candidate
 
         raise HTTPException(status_code=500, detail="No operator id provided; please configure DEFAULT_OPERATOR_ID")
+
+    def _generate_agora_uid(self, user_id: str) -> int:
+        """Generate deterministic Agora UID."""
+        salted_input = f"{self.uid_salt}:{user_id}"
+        crc32_hash = zlib.crc32(salted_input.encode("utf-8")) & 0xFFFFFFFF
+        uid = (crc32_hash % (self.MAX_UID - 1)) + 1
+        return uid
 
     async def get_users(self, params: UserSearchParams) -> UserListResponse:
         """Get user list with search and pagination - joining users, authors, and wallets."""
@@ -154,11 +164,39 @@ class UserService:
             raise HTTPException(status_code=404, detail="User not found")
 
         wallet_models = [WalletResponse.model_validate(w) for w in user.wallets]
+        author_user_id = user.author.user_id if user.author else user.id
+
+        im_id = None
+        try:
+            im_result = await self.db.execute(
+                text("SELECT im_id FROM toci_im WHERE toci_id = :toci_id LIMIT 1"),
+                {"toci_id": author_user_id},
+            )
+            im_id = im_result.scalar_one_or_none()
+        except Exception:
+            im_id = None
+
+        role = None
+        try:
+            role_result = await self.db.execute(
+                text("SELECT name FROM permissions WHERE author_id = :author_id LIMIT 1"),
+                {"author_id": author_user_id},
+            )
+            role = role_result.scalar_one_or_none()
+        except Exception:
+            role = None
+
+        agora_id = self._generate_agora_uid(user.id)
 
         return UserDetailResponse(
             user=UserResponse.model_validate(user),
             author=AuthorResponse.model_validate(user.author) if user.author else None,
             wallets=wallet_models,
+            im_id=im_id,
+            role=role,
+            agora_id=agora_id,
+            app_version="",
+            yidun_task_id="",
         )
 
     async def get_ban_history(
