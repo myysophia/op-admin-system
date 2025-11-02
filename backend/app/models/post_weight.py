@@ -16,6 +16,7 @@ class PostWeight(Base):
     post_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     weight: Mapped[float] = mapped_column(Numeric(14, 4), nullable=False)
     operator: Mapped[str] = mapped_column(String(255), nullable=False)
+    operator_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False

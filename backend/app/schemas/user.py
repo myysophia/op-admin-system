@@ -166,6 +166,7 @@ class UserUpdate(BaseModel):
 
 class BanUserRequest(BanRequest):
     """Backward-compatible alias for ban request schema."""
+    ban_method: Optional[str] = Field(None, description="封禁方式 (account/device)")
 
 
 class UnbanUserRequest(UnbanRequest):
@@ -194,7 +195,9 @@ class BanHistoryItem(BaseModel):
     reason: Optional[str] = None
     duration_seconds: Optional[int] = None
     operator_id: str
+    operator_name: Optional[str] = None
     created_at: datetime
+    ban_method: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -203,3 +206,5 @@ class BanHistoryItem(BaseModel):
 class BanHistoryListResponse(BaseModel):
     items: List[BanHistoryItem]
     total: int
+    page: int
+    size: int

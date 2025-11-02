@@ -56,6 +56,7 @@ class PostWeightService:
         self,
         payload: PostWeightCreateRequest,
         operator_id: str,
+        operator_name: str,
     ) -> List[PostWeightResponse]:
         """Create or update post weights."""
         pairs = self._normalize_urls(payload.post_urls)
@@ -83,7 +84,8 @@ class PostWeightService:
         }
 
         now = datetime.utcnow()
-        operator = payload.operator or operator_id
+        operator = operator_id
+        operator_display_name = payload.operator or operator_name or operator_id
 
         affected_records: List[PostWeight] = []
 
@@ -96,6 +98,7 @@ class PostWeightService:
                     post_id=post_id,
                     weight=payload.weight,
                     operator=operator,
+                    operator_name=operator_display_name,
                     created_at=now,
                     updated_at=now,
                 )
@@ -104,6 +107,7 @@ class PostWeightService:
                 record.post_url = post_url
                 record.weight = payload.weight
                 record.operator = operator
+                record.operator_name = operator_display_name
                 record.deleted_at = None
                 record.updated_at = now
 

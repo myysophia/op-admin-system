@@ -2,7 +2,7 @@
 from datetime import datetime
 from decimal import Decimal
 from typing import List, Optional
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class PostWeightCreateRequest(BaseModel):
@@ -21,6 +21,7 @@ class PostWeightResponse(BaseModel):
     post_id: str
     weight: float
     operator: str
+    operator_name: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -30,6 +31,12 @@ class PostWeightResponse(BaseModel):
         if isinstance(value, Decimal):
             return float(value)
         return value
+
+    @model_validator(mode="after")
+    def fill_operator_name(self):
+        if self.operator_name is None:
+            object.__setattr__(self, "operator_name", self.operator)
+        return self
 
     class Config:
         from_attributes = True

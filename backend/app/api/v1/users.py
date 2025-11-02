@@ -16,7 +16,7 @@ from app.schemas.user import (
 )
 from app.schemas.common import Response
 from app.services.user_service import UserService
-from app.auth import get_operator_id
+from app.auth import get_operator_context
 
 router = APIRouter()
 
@@ -93,12 +93,12 @@ async def get_user_detail(
 async def get_user_ban_history(
     uid: str = Path(..., description="User ID"),
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    size: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
 ):
     """Get ban/unban history for a user."""
     user_service = UserService(db)
-    history = await user_service.get_ban_history(uid, page, page_size)
+    history = await user_service.get_ban_history(uid, page, size)
     return Response(data=history)
 
 
@@ -106,7 +106,7 @@ async def get_user_ban_history(
 async def update_user(
     uid: str = Path(..., description="User ID (e.g., 'BhqB31UxCNa')"),
     user_data: UserUpdate = None,
-    operator_id: str = Depends(get_operator_id),
+    operator_ctx = Depends(get_operator_context),
     db: AsyncSession = Depends(get_db),
 ):
     """Update user information."""
@@ -114,7 +114,7 @@ async def update_user(
         raise HTTPException(status_code=400, detail="No update payload provided")
 
     user_service = UserService(db)
-    user = await user_service.update_user(uid, user_data, operator_id)
+    user = await user_service.update_user(uid, user_data, operator_ctx.operator_id, operator_ctx.operator_name)
     return Response(data=user, message="User updated successfully")
 
 
@@ -123,7 +123,7 @@ async def ban_user(
     uid: str = Path(..., description="User ID"),
     ban_data: BanUserRequest = None,
     role: str = Query("write", description="Operation role"),
-    operator_id: str = Depends(get_operator_id),
+    operator_ctx = Depends(get_operator_context),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -137,7 +137,7 @@ async def ban_user(
     After banning, user's status will be set to 'banned'.
     """
     user_service = UserService(db)
-    await user_service.ban_user(uid, ban_data, operator_id)
+    await user_service.ban_user(uid, ban_data, operator_ctx.operator_id, operator_ctx.operator_name)
 
     return Response(message="User banned successfully")
 
@@ -147,7 +147,7 @@ async def unban_user(
     uid: str = Path(..., description="User ID"),
     unban_data: UnbanUserRequest = None,
     role: str = Query("write", description="Operation role"),
-    operator_id: str = Depends(get_operator_id),
+    operator_ctx = Depends(get_operator_context),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -159,6 +159,6 @@ async def unban_user(
     After unbanning, user's status will be set to 'active'.
     """
     user_service = UserService(db)
-    await user_service.unban_user(uid, unban_data, operator_id)
+    await user_service.unban_user(uid, unban_data, operator_ctx.operator_id, operator_ctx.operator_name)
 
     return Response(message="User unbanned successfully")

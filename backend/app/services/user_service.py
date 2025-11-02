@@ -197,9 +197,9 @@ class UserService:
         self,
         user_id: str,
         page: int,
-        page_size: int,
+        size: int,
     ) -> BanHistoryListResponse:
-        if page < 1 or page_size < 1:
+        if page < 1 or size < 1:
             raise HTTPException(status_code=400, detail="Invalid pagination parameters")
 
         query = select(BanHistory).where(BanHistory.user_id == user_id)
@@ -208,15 +208,21 @@ class UserService:
 
         stmt = (
             query.order_by(BanHistory.created_at.desc())
-            .offset((page - 1) * page_size)
-            .limit(page_size)
+            .offset((page - 1) * size)
+            .limit(size)
         )
         result = await self.db.execute(stmt)
         items = [BanHistoryItem.model_validate(row) for row in result.scalars().all()]
 
-        return BanHistoryListResponse(items=items, total=total)
+        return BanHistoryListResponse(items=items, total=total, page=page, size=size)
 
-    async def update_user(self, user_id: str, user_data: UserUpdate, operator_id: str) -> UserResponse:
+    async def update_user(
+        self,
+        user_id: str,
+        user_data: UserUpdate,
+        operator_id: str,
+        operator_name: str,
+    ) -> UserResponse:
         """Update mutable user fields."""
         payload = user_data.model_dump(exclude_unset=True)
 
@@ -245,7 +251,7 @@ class UserService:
             action_type="update_user",
             target_type="user",
             target_id=user_id,
-            action_details=payload,
+            action_details={**payload, "operator_name": operator_name},
         )
 
         return UserResponse.model_validate(user)
@@ -254,7 +260,8 @@ class UserService:
         self,
         user_id: str,
         ban_data: BanRequest,
-        operator_id: str
+        operator_id: str,
+        operator_name: str,
     ) -> None:
         """Ban user account."""
         # Get user
@@ -306,6 +313,8 @@ class UserService:
             reason=ban_data.reason,
             duration_seconds=ban_data.duration,
             operator_id=resolved_operator_id,
+            ban_method=ban_data.ban_method,
+            operator_name=operator_name,
             created_at=datetime.utcnow()
         )
         self.db.add(history_entry)
@@ -339,7 +348,9 @@ class UserService:
                 "reason": ban_data.reason,
                 "duration_seconds": ban_data.duration,
                 "ends_at": ends_at.isoformat() if ends_at else None,
-                "notify": ban_data.notify
+                "notify": ban_data.notify,
+                "ban_method": ban_data.ban_method,
+                "operator_name": operator_name,
             }
         )
 
@@ -347,7 +358,8 @@ class UserService:
         self,
         user_id: str,
         unban_data: Optional[UnbanRequest],
-        operator_id: str
+        operator_id: str,
+        operator_name: str,
     ) -> None:
         """Unban user account."""
         # Get user
@@ -380,15 +392,17 @@ class UserService:
             ban.revoked_by = resolved_operator_id
             ban.revoke_reason = unban_reason
 
-            history_entry = BanHistory(
-                user_id=user_id,
-                action="unban",
-                reason=unban_reason,
-                duration_seconds=None,
-                operator_id=resolved_operator_id,
-                created_at=datetime.utcnow(),
-            )
-            self.db.add(history_entry)
+        history_entry = BanHistory(
+            user_id=user_id,
+            action="unban",
+            reason=unban_reason,
+            duration_seconds=None,
+            operator_id=resolved_operator_id,
+            ban_method=None,
+            operator_name=operator_name,
+            created_at=datetime.utcnow(),
+        )
+        self.db.add(history_entry)
 
         # Update user status to 'active'
         user.status = "active"
@@ -416,6 +430,7 @@ class UserService:
             target_id=user_id,
             action_details={
                 "reason": unban_reason,
-                "bans_revoked": len(active_bans)
+                "bans_revoked": len(active_bans),
+                "operator_name": operator_name,
             }
         )

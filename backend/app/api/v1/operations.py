@@ -20,7 +20,7 @@ from app.services.meme_service import MemeService
 from app.services.kafka_service import kafka_service
 from app.services.post_weight_service import PostWeightService
 from app.config import settings
-from app.auth import get_operator_id
+from app.auth import get_operator_context
 import logging
 
 router = APIRouter()
@@ -72,7 +72,7 @@ async def get_meme_detail(
 async def review_meme(
     order_id: str = Path(..., description="Meme order ID"),
     review_data: MemeReviewRequest = None,
-    operator_id: str = Depends(get_operator_id),
+    operator_ctx = Depends(get_operator_context),
     db: AsyncSession = Depends(get_db),
     # operator_id: str = Depends(get_current_user),  # TODO: Add auth
 ):
@@ -85,7 +85,7 @@ async def review_meme(
     The message will be removed from the review queue after processing.
     """
     meme_service = MemeService(db)
-    await meme_service.review_meme(order_id, review_data, operator_id)
+    await meme_service.review_meme(order_id, review_data, operator_ctx.operator_id)
 
     return Response(message=f"Meme {review_data.action}d successfully")
 
@@ -155,12 +155,16 @@ async def load_mock_memes(
 )
 async def create_post_weights(
     payload: PostWeightCreateRequest,
-    operator_id: str = Depends(get_operator_id),
+    operator_ctx = Depends(get_operator_context),
     db: AsyncSession = Depends(get_db),
 ):
     """创建或更新帖子权重，并通知推荐系统."""
     service = PostWeightService(db)
-    records = await service.create_or_update(payload, operator_id)
+    records = await service.create_or_update(
+        payload,
+        operator_ctx.operator_id,
+        operator_ctx.operator_name,
+    )
     return Response(message="帖子权重已更新", data=records)
 
 

@@ -16,5 +16,7 @@ class BanHistory(Base):
     action: Mapped[str] = mapped_column(String(10), nullable=False)  # ban / unban
     reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     duration_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    ban_method: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    operator_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     operator_id: Mapped[str] = mapped_column(String, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False, index=True)
