@@ -1,6 +1,6 @@
 """User schemas - matching actual database structure."""
 from datetime import datetime, date
-from typing import Optional, List
+from typing import Optional, List, Literal
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -97,7 +97,8 @@ class BanRequest(BaseModel):
                 "reason": "test",
                 "duration": 180,
                 "notify": True,
-                "notify_message": "Your account has been temporarily banned"
+                "notify_message": "Your account has been temporarily banned",
+                "ban_method": "account"
             }
         }
 
@@ -166,7 +167,7 @@ class UserUpdate(BaseModel):
 
 class BanUserRequest(BanRequest):
     """Backward-compatible alias for ban request schema."""
-    ban_method: Optional[str] = Field(None, description="封禁方式 (account/device)")
+    ban_method: Literal["account", "device"] = Field(..., description="封禁方式 (account/device)")
 
 
 class UnbanUserRequest(UnbanRequest):
