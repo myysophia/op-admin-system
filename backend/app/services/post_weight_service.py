@@ -170,7 +170,42 @@ class PostWeightService:
             raise HTTPException(status_code=404, detail="记录不存在或已删除")
 
         record.deleted_at = datetime.utcnow()
+        record.updated_at = datetime.utcnow()
+        await self.db.flush()
+
+        await self._notify_remove([record.post_id])
+
         await self.db.commit()
+
+    async def cancel_weights(self, post_ids: List[str]) -> Dict[str, int]:
+        """批量取消帖子权重并同步推荐系统。"""
+        normalized_ids = [pid.strip() for pid in post_ids if pid and pid.strip()]
+        normalized_ids = list(dict.fromkeys(normalized_ids))
+
+        if not normalized_ids:
+            raise HTTPException(status_code=400, detail="post_ids不能为空")
+
+        stmt = select(PostWeight).where(
+            PostWeight.post_id.in_(normalized_ids),
+            PostWeight.deleted_at.is_(None),
+        )
+        result = await self.db.execute(stmt)
+        records = result.scalars().all()
+
+        now = datetime.utcnow()
+        updated = 0
+        for record in records:
+            record.deleted_at = now
+            record.updated_at = now
+            updated += 1
+
+        await self.db.flush()
+
+        await self._notify_remove(normalized_ids)
+
+        await self.db.commit()
+
+        return {"requested": len(normalized_ids), "updated": updated}
 
     async def _notify_recommendation(self, post_ids: Iterable[str]) -> None:
         """Call external recommendation service."""
@@ -211,4 +246,45 @@ class PostWeightService:
             raise HTTPException(
                 status_code=502,
                 detail=f"推荐系统调用失败: {exc}, payload={payload}"
+            ) from exc
+
+    async def _notify_remove(self, post_ids: Iterable[str]) -> None:
+        """通知推荐系统移除帖子权重。"""
+        if not settings.POST_WEIGHT_REMOVE_API_URL:
+            return
+
+        post_ids = list(post_ids)
+        if not post_ids:
+            return
+
+        headers = {"Content-Type": "application/json"}
+        if settings.POST_WEIGHT_API_TOKEN:
+            headers["X-Token"] = settings.POST_WEIGHT_API_TOKEN
+
+        payload = {"post_ids": post_ids}
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(
+                    settings.POST_WEIGHT_REMOVE_API_URL,
+                    json=payload,
+                    headers=headers,
+                )
+
+            if response.status_code != 200:
+                await self.db.rollback()
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        f"推荐系统删除接口返回异常: {response.status_code}, body={response.text}, payload={payload}"
+                    ),
+                )
+
+        except HTTPException:
+            raise
+        except Exception as exc:
+            await self.db.rollback()
+            raise HTTPException(
+                status_code=502,
+                detail=f"推荐系统删除调用失败: {exc}, payload={payload}"
             ) from exc

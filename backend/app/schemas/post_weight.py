@@ -13,6 +13,18 @@ class PostWeightCreateRequest(BaseModel):
     operator: Optional[str] = Field(None, description="操作人标识，默认使用当前登录用户")
 
 
+class PostWeightCancelRequest(BaseModel):
+    """批量取消帖子权重的请求体."""
+
+    post_ids: List[str] = Field(..., min_length=1, description="需要取消权重的post_id列表")
+
+    @model_validator(mode="after")
+    def ensure_unique(self):
+        unique = list(dict.fromkeys(self.post_ids))
+        object.__setattr__(self, "post_ids", unique)
+        return self
+
+
 class PostWeightResponse(BaseModel):
     """帖子权重记录响应."""
 

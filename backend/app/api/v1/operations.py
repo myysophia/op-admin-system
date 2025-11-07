@@ -13,6 +13,7 @@ from app.schemas.meme import (
 from app.schemas.common import Response
 from app.schemas.post_weight import (
     PostWeightCreateRequest,
+    PostWeightCancelRequest,
     PostWeightListResponse,
     PostWeightResponse,
 )
@@ -182,6 +183,22 @@ async def list_post_weights(
     service = PostWeightService(db)
     result = await service.list_post_weights(page, page_size)
     return Response(data=result)
+
+
+@router.post(
+    "/post-weights/cancel",
+    response_model=Response[dict],
+    summary="批量取消帖子权重",
+)
+async def cancel_post_weights(
+    payload: PostWeightCancelRequest,
+    operator_ctx = Depends(get_operator_context),
+    db: AsyncSession = Depends(get_db),
+):
+    """取消帖子权重并同步推荐系统删除接口."""
+    service = PostWeightService(db)
+    result = await service.cancel_weights(payload.post_ids)
+    return Response(message="帖子权重已取消", data=result)
 
 
 @router.delete(

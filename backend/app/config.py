@@ -62,6 +62,7 @@ class Settings(BaseSettings):
 
     # Recommendation / Post Weighting
     POST_WEIGHT_API_URL: Optional[str] = None
+    POST_WEIGHT_REMOVE_API_URL: Optional[str] = None
     POST_WEIGHT_API_TOKEN: Optional[str] = None
 
     # Documentation
