@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = "./uploads"
 
     # Logging
-    LOG_LEVEL: str = "INFO"
+    LOG_LEVEL: str = Field("INFO", description="Python logging level (e.g., INFO/WARNING/ERROR)")
     LOG_FILE: str = "./logs/app.log"
 
     # Kafka

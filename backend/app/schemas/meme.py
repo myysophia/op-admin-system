@@ -60,6 +60,7 @@ class MemeReviewListItem(BaseModel):
     chain_id: int
     social_links: Dict[str, Any]
     user_region: str
+    holdview_amount: Optional[int] = None
 
     # Kafka metadata
     kafka_timestamp: Optional[datetime] = None

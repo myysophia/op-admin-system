@@ -5,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import HTTPException
 from app.models.user import Author
+from app.models.post import Post
 from app.schemas.meme import (
     MemeSearchParams,
     MemeReviewListResponse,
@@ -50,6 +51,14 @@ class MemeService:
             name=params.name
         )
 
+        # Preload holdview_amount from posts table
+        collection_ids = list({m.get('collection_id') for m in memes if m.get('collection_id')})
+        holdview_map: dict[str, int] = {}
+        if collection_ids:
+            stmt = select(Post.id, Post.holdview_amount).where(Post.id.in_(collection_ids))
+            result = await self.db.execute(stmt)
+            holdview_map = {row[0]: row[1] for row in result.all()}
+
         # Enrich with author information if available
         items = []
         for meme in memes:
@@ -67,6 +76,14 @@ class MemeService:
                     creator_name = author.name
 
             # Build response item
+            collection_id = meme.get('collection_id')
+            holdview_amount = holdview_map.get(collection_id) if collection_id else None
+            if holdview_amount is None and meme.get('holdview_amount') is not None:
+                try:
+                    holdview_amount = int(meme['holdview_amount'])
+                except (TypeError, ValueError):
+                    holdview_amount = None
+
             item = MemeReviewListItem(
                 order_id=meme['order_id'],
                 user_id=meme['user_id'],
@@ -78,6 +95,7 @@ class MemeService:
                 chain_id=meme['chain_id'],
                 social_links=meme.get('social_links', {}),
                 user_region=meme['user_region'],
+                holdview_amount=holdview_amount,
                 kafka_timestamp=datetime.fromtimestamp(meme['_kafka_timestamp'] / 1000) if meme.get('_kafka_timestamp') else None,
                 creator_username=creator_username,
                 creator_name=creator_name

@@ -152,65 +152,65 @@ async def load_mock_memes(
 @router.post(
     "/post-weights",
     response_model=Response[List[PostWeightResponse]],
-    summary="批量新增或更新帖子权重",
+    summary="Bulk create or update post weights",
 )
 async def create_post_weights(
     payload: PostWeightCreateRequest,
     operator_ctx = Depends(get_operator_context),
     db: AsyncSession = Depends(get_db),
 ):
-    """创建或更新帖子权重，并通知推荐系统."""
+    """Create or update post weights and notify recommendation service."""
     service = PostWeightService(db)
     records = await service.create_or_update(
         payload,
         operator_ctx.operator_id,
         operator_ctx.operator_name,
     )
-    return Response(message="帖子权重已更新", data=records)
+    return Response(message="Post weights updated", data=records)
 
 
 @router.get(
     "/post-weights",
     response_model=Response[PostWeightListResponse],
-    summary="查询帖子权重列表",
+    summary="List post weight records",
 )
 async def list_post_weights(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
 ):
-    """获取帖子权重配置列表."""
+    """Retrieve existing post weight configurations."""
     service = PostWeightService(db)
     result = await service.list_post_weights(page, page_size)
-    return Response(data=result)
+    return Response(message="Post weights fetched", data=result)
 
 
 @router.post(
     "/post-weights/cancel",
     response_model=Response[dict],
-    summary="批量取消帖子权重",
+    summary="Batch cancel post weights",
 )
 async def cancel_post_weights(
     payload: PostWeightCancelRequest,
     operator_ctx = Depends(get_operator_context),
     db: AsyncSession = Depends(get_db),
 ):
-    """取消帖子权重并同步推荐系统删除接口."""
+    """Cancel post weights and notify removal to recommendation service."""
     service = PostWeightService(db)
     result = await service.cancel_weights(payload.post_ids)
-    return Response(message="帖子权重已取消", data=result)
+    return Response(message="Post weights canceled", data=result)
 
 
 @router.delete(
     "/post-weights/{record_id}",
     response_model=Response[dict],
-    summary="软删除帖子权重记录",
+    summary="Soft delete a post weight record",
 )
 async def delete_post_weight(
-    record_id: int = Path(..., description="帖子权重记录ID"),
+    record_id: int = Path(..., description="Post weight record ID"),
     db: AsyncSession = Depends(get_db),
 ):
-    """软删除帖子权重记录."""
+    """Soft delete a post weight record."""
     service = PostWeightService(db)
     await service.soft_delete(record_id)
-    return Response(message="帖子权重记录已删除")
+    return Response(message="Post weight record deleted")
