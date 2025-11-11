@@ -53,7 +53,8 @@ async def get_users(
     """
     params = UserSearchParams(
         user_id=uid,
-        username=username or displayname,
+        username=username,
+        display_name=displayname,
         email=email,
         phone_number=tel,
         wallet_address=wallet_address,

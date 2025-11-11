@@ -128,6 +128,7 @@ class UserSearchParams(BaseModel):
     # Search fields
     user_id: Optional[str] = None
     username: Optional[str] = None
+    display_name: Optional[str] = None
     email: Optional[str] = None
     phone_number: Optional[str] = None
     wallet_address: Optional[str] = None  # pubkey

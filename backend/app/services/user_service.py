@@ -83,11 +83,14 @@ class UserService:
         if params.region:
             filters.append(User.region == params.region)
 
-        # Username search (in authors table)
+        # Username / display name search (in authors table)
+        author_conditions = []
         if params.username:
-            author_subquery = select(Author.user_id).where(
-                Author.username.ilike(f"%{params.username}%")
-            )
+            author_conditions.append(Author.username.ilike(f"%{params.username}%"))
+        if params.display_name:
+            author_conditions.append(Author.name.ilike(f"%{params.display_name}%"))
+        if author_conditions:
+            author_subquery = select(Author.user_id).where(or_(*author_conditions))
             filters.append(User.id.in_(author_subquery))
 
         # Wallet address search (in user_wallet table)
