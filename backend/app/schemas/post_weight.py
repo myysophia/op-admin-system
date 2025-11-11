@@ -33,6 +33,9 @@ class PostWeightResponse(BaseModel):
     post_id: str
     weight: float
     operator: str
+    operator_id: Optional[str] = Field(
+        default=None, description="操作人ID，兼容旧字段operator"
+    )
     operator_name: Optional[str] = None
     created_at: datetime
     updated_at: datetime
@@ -48,6 +51,8 @@ class PostWeightResponse(BaseModel):
     def fill_operator_name(self):
         if self.operator_name is None:
             object.__setattr__(self, "operator_name", self.operator)
+        if self.operator_id is None:
+            object.__setattr__(self, "operator_id", self.operator)
         return self
 
     class Config:

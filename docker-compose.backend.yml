@@ -13,6 +13,11 @@ services:
       --port 8000
     ports:
       - "8000:8000"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "3m"
+        max-file: "2"
     networks:
       - memefans-net
 
