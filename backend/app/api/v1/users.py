@@ -138,7 +138,13 @@ async def ban_user(
     After banning, user's status will be set to 'banned'.
     """
     user_service = UserService(db)
-    await user_service.ban_user(uid, ban_data, operator_ctx.operator_id, operator_ctx.operator_name)
+    await user_service.ban_user(
+        uid,
+        ban_data,
+        operator_ctx.operator_id,
+        operator_ctx.operator_name,
+        operator_ctx.authorization,
+    )
 
     return Response(message="User banned successfully")
 
@@ -160,6 +166,12 @@ async def unban_user(
     After unbanning, user's status will be set to 'active'.
     """
     user_service = UserService(db)
-    await user_service.unban_user(uid, unban_data, operator_ctx.operator_id, operator_ctx.operator_name)
+    await user_service.unban_user(
+        uid,
+        unban_data,
+        operator_ctx.operator_id,
+        operator_ctx.operator_name,
+        operator_ctx.authorization,
+    )
 
     return Response(message="User unbanned successfully")

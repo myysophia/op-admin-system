@@ -60,6 +60,9 @@ class Settings(BaseSettings):
     # External Notification API
     NOTIFICATION_API_URL: str = "http://toci-dev-01.aurora:8014"
 
+    # External user management APIs
+    EXTERNAL_USER_API_URL: Optional[str] = None
+
     # Recommendation / Post Weighting
     POST_WEIGHT_API_URL: Optional[str] = None
     POST_WEIGHT_REMOVE_API_URL: Optional[str] = None

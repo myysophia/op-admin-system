@@ -3,7 +3,9 @@ from datetime import datetime, timedelta
 from typing import Optional
 import uuid
 import zlib
+import logging
 
+import httpx
 from fastapi import HTTPException
 from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,6 +30,8 @@ from app.schemas.user import (
 )
 from app.services.audit_service import AuditService
 from app.services.notification_service import notification_service
+
+logger = logging.getLogger(__name__)
 
 
 class UserService:
@@ -265,8 +269,12 @@ class UserService:
         ban_data: BanRequest,
         operator_id: str,
         operator_name: str,
+        authorization_header: str,
     ) -> None:
         """Ban user account."""
+        if ban_data is None:
+            raise HTTPException(status_code=400, detail="Ban payload is required")
+
         # Get user
         query = select(User).where(User.id == user_id)
         result = await self.db.execute(query)
@@ -326,6 +334,10 @@ class UserService:
         user.status = "banned"
         user.updated_at = datetime.utcnow()
 
+        await self.db.flush()
+
+        await self._call_external_ban_api(user_id, ban_data, authorization_header)
+
         await self.db.commit()
 
         # Send notification via external notification API
@@ -363,6 +375,7 @@ class UserService:
         unban_data: Optional[UnbanRequest],
         operator_id: str,
         operator_name: str,
+        authorization_header: str,
     ) -> None:
         """Unban user account."""
         # Get user
@@ -411,6 +424,10 @@ class UserService:
         user.status = "active"
         user.updated_at = datetime.utcnow()
 
+        await self.db.flush()
+
+        await self._call_external_unban_api(user_id, unban_reason, authorization_header)
+
         await self.db.commit()
 
         # Send unban notification via external notification API
@@ -437,3 +454,123 @@ class UserService:
                 "operator_name": operator_name,
             }
         )
+
+    async def _call_external_ban_api(
+        self,
+        user_id: str,
+        ban_data: BanRequest,
+        authorization_header: str,
+    ) -> None:
+        """调用外部封禁接口，确保与上游系统同步。"""
+        api_url = settings.EXTERNAL_USER_API_URL
+        if not api_url:
+            await self.db.rollback()
+            raise HTTPException(status_code=500, detail="外部封禁接口未配置")
+
+        endpoint = f"{api_url.rstrip('/')}/users/{user_id}/ban"
+        headers = {
+            "accept": "application/json",
+            "Authorization": authorization_header,
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "reason": ban_data.reason,
+            "duration": ban_data.duration or 0,
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(
+                    endpoint,
+                    params={"role": "write"},
+                    json=payload,
+                    headers=headers,
+                )
+
+            if response.status_code != 200:
+                logger.error(
+                    "外部封禁接口调用返回异常",
+                    extra={
+                        "user_id": user_id,
+                        "status_code": response.status_code,
+                        "response": response.text,
+                        "payload": payload,
+                    },
+                )
+                await self.db.rollback()
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"外部封禁接口返回异常状态: {response.status_code}",
+                )
+
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.exception(
+                "调用外部封禁接口失败",
+                extra={"user_id": user_id, "payload": payload},
+            )
+            await self.db.rollback()
+            raise HTTPException(
+                status_code=502,
+                detail=f"调用外部封禁接口失败: {exc}",
+            ) from exc
+
+    async def _call_external_unban_api(
+        self,
+        user_id: str,
+        reason: Optional[str],
+        authorization_header: str,
+    ) -> None:
+        """调用外部解封接口，确保状态一致。"""
+        api_url = settings.EXTERNAL_USER_API_URL
+        if not api_url:
+            await self.db.rollback()
+            raise HTTPException(status_code=500, detail="外部解封接口未配置")
+
+        endpoint = f"{api_url.rstrip('/')}/users/{user_id}/unban"
+        headers = {
+            "accept": "application/json",
+            "Authorization": authorization_header,
+        }
+        payload = {"reason": reason} if reason else None
+        request_kwargs = {
+            "params": {"role": "write"},
+            "headers": headers,
+        }
+        if payload is not None:
+            headers["Content-Type"] = "application/json"
+            request_kwargs["json"] = payload
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(endpoint, **request_kwargs)
+
+            if response.status_code != 200:
+                logger.error(
+                    "外部解封接口调用返回异常",
+                    extra={
+                        "user_id": user_id,
+                        "status_code": response.status_code,
+                        "response": response.text,
+                        "payload": payload,
+                    },
+                )
+                await self.db.rollback()
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"外部解封接口返回异常状态: {response.status_code}",
+                )
+
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.exception(
+                "调用外部解封接口失败",
+                extra={"user_id": user_id, "payload": payload},
+            )
+            await self.db.rollback()
+            raise HTTPException(
+                status_code=502,
+                detail=f"调用外部解封接口失败: {exc}",
+            ) from exc

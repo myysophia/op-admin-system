@@ -14,6 +14,8 @@ logger = logging.getLogger(__name__)
 class OperatorContext:
     operator_id: str
     operator_name: str
+    token: str
+    authorization: str
 
 
 def _parse_jwt_payload(token: str) -> dict:
@@ -29,7 +31,12 @@ def get_operator_context(authorization: Optional[str] = Header(None)) -> Operato
     if not authorization:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authorization header missing")
 
-    token = authorization.split(" ", 1)[1].strip() if authorization.lower().startswith("bearer ") else authorization.strip()
+    normalized_header = authorization.strip()
+    token = (
+        normalized_header.split(" ", 1)[1].strip()
+        if normalized_header.lower().startswith("bearer ")
+        else normalized_header
+    )
 
     try:
         payload = _parse_jwt_payload(token)
@@ -37,7 +44,12 @@ def get_operator_context(authorization: Optional[str] = Header(None)) -> Operato
         if not operator_id:
             raise ValueError("sub claim missing")
         operator_name = payload.get("operator_name") or payload.get("name") or payload.get("username") or operator_id
-        return OperatorContext(operator_id=operator_id, operator_name=str(operator_name))
+        return OperatorContext(
+            operator_id=operator_id,
+            operator_name=str(operator_name),
+            token=token,
+            authorization=normalized_header,
+        )
     except Exception as exc:
         logger.error("Failed to parse operator from token: %s", exc)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
