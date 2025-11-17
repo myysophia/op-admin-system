@@ -49,6 +49,18 @@ class UserService:
             return preferred_id
         raise HTTPException(status_code=401, detail="Operator id not provided")
 
+    async def _resolve_operator_name(self, operator_id: str) -> str:
+        """根据操作员ID反查作者表，找不到时回退到 operator_id。"""
+        if not operator_id:
+            return ""
+
+        stmt = select(Author.username).where(Author.id == operator_id)
+        username = await self.db.scalar(stmt)
+        if username:
+            return username
+
+        return operator_id
+
     def _generate_agora_uid(self, user_id: str) -> int:
         """Generate deterministic Agora UID."""
         salted_input = f"{self.uid_salt}:{user_id}"
@@ -219,7 +231,24 @@ class UserService:
             .limit(size)
         )
         result = await self.db.execute(stmt)
-        items = [BanHistoryItem.model_validate(row) for row in result.scalars().all()]
+        ban_items = [BanHistoryItem.model_validate(row) for row in result.scalars().all()]
+
+        # 运营平台要求展示操作者的可读名称，这里使用 operator_id 反查 authors.username
+        operator_ids = {item.operator_id for item in ban_items if item.operator_id}
+        operator_name_map: dict[str, Optional[str]] = {}
+        if operator_ids:
+            name_stmt = select(Author.id, Author.username).where(Author.id.in_(operator_ids))
+            name_result = await self.db.execute(name_stmt)
+            operator_name_map = {row[0]: row[1] for row in name_result.all()}
+
+        items = [
+            item.model_copy(
+                update={
+                    "operator_name": operator_name_map.get(item.operator_id) or item.operator_name or item.operator_id
+                }
+            )
+            for item in ban_items
+        ]
 
         return BanHistoryListResponse(items=items, total=total, page=page, size=size)
 
@@ -252,13 +281,14 @@ class UserService:
 
         # Audit log
         resolved_operator_id = self._resolve_operator_id(operator_id)
+        resolved_operator_name = await self._resolve_operator_name(resolved_operator_id)
 
         await self.audit_service.log_action(
             operator_id=resolved_operator_id,
             action_type="update_user",
             target_type="user",
             target_id=user_id,
-            action_details={**payload, "operator_name": operator_name},
+            action_details={**payload, "operator_name": resolved_operator_name},
         )
 
         return UserResponse.model_validate(user)
@@ -305,6 +335,7 @@ class UserService:
             ends_at = datetime.utcnow() + timedelta(seconds=ban_data.duration)
 
         resolved_operator_id = self._resolve_operator_id(operator_id)
+        resolved_operator_name = await self._resolve_operator_name(resolved_operator_id)
 
         # Create ban record
         ban = Ban(
@@ -325,7 +356,7 @@ class UserService:
             duration_seconds=ban_data.duration,
             operator_id=resolved_operator_id,
             ban_method=ban_data.ban_method,
-            operator_name=operator_name,
+            operator_name=resolved_operator_name,
             created_at=datetime.utcnow()
         )
         self.db.add(history_entry)
@@ -365,7 +396,7 @@ class UserService:
                 "ends_at": ends_at.isoformat() if ends_at else None,
                 "notify": ban_data.notify,
                 "ban_method": ban_data.ban_method,
-                "operator_name": operator_name,
+                "operator_name": resolved_operator_name,
             }
         )
 
@@ -400,6 +431,7 @@ class UserService:
             raise HTTPException(status_code=400, detail="User has no active bans")
 
         resolved_operator_id = self._resolve_operator_id(operator_id)
+        resolved_operator_name = await self._resolve_operator_name(resolved_operator_id)
 
         # Revoke all active bans
         unban_reason = unban_data.reason if unban_data and unban_data.reason else "Unbanned by operator"
@@ -415,7 +447,7 @@ class UserService:
             duration_seconds=None,
             operator_id=resolved_operator_id,
             ban_method=None,
-            operator_name=operator_name,
+            operator_name=resolved_operator_name,
             created_at=datetime.utcnow(),
         )
         self.db.add(history_entry)
@@ -451,7 +483,7 @@ class UserService:
             action_details={
                 "reason": unban_reason,
                 "bans_revoked": len(active_bans),
-                "operator_name": operator_name,
+                "operator_name": resolved_operator_name,
             }
         )
 
