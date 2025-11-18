@@ -55,3 +55,4 @@ alembic/versions/*.pyc
 backend/docs/*
 picture/*
 sql/*.sql
+!sql/support_quick_messages.sql
