@@ -11,7 +11,7 @@ from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from app.api.v1 import operations, support, users
+from app.api.v1 import configuration, operations, support, users
 from app.config import settings
 from app.database import close_db, init_db
 from app.services.kafka_service import kafka_service
@@ -161,6 +161,7 @@ async def custom_openapi() -> JSONResponse:
 app.include_router(operations.router, prefix="/api/v1/operations", tags=["Operations"])
 app.include_router(users.router, prefix="/api/v1", tags=["Users"])
 app.include_router(support.router, prefix="/api/v1/support", tags=["Support"])
+app.include_router(configuration.router, prefix="/api/v1/configuration", tags=["Configuration"])
 
 
 if __name__ == "__main__":

@@ -68,6 +68,19 @@ class Settings(BaseSettings):
     POST_WEIGHT_REMOVE_API_URL: Optional[str] = None
     POST_WEIGHT_API_TOKEN: Optional[str] = None
 
+    # Support module
+    SUPPORT_SUPER_ADMINS: List[str] = Field(default_factory=list, description="客服超级管理员ID列表")
+
+    # Cloudflare R2 storage (用于客服快捷消息图片)
+    CF_ACCOUNT_ID: Optional[str] = None
+    CF_CUSTOMER_SUBDOMAIN: Optional[str] = None
+    CF_R2_ACCESS_KEY_ID: Optional[str] = None
+    CF_R2_SECRET_ACCESS_KEY: Optional[str] = None
+    CF_R2_ENDPOINT: Optional[str] = None
+    CF_R2_BUCKET: Optional[str] = None
+    CF_R2_IMAGES_MEMEFANS_ACCESS_URL: Optional[str] = None
+    CF_R2_FILES_MEMEFANS_ACCESS_URL: Optional[str] = None
+
     # Documentation
     DOCS_DEFAULT_TOKEN: Optional[str] = (
         "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."

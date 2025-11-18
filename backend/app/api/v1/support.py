@@ -1,275 +1,197 @@
-"""Support API routes - simplified (OpenIM handles real-time messaging)."""
-from typing import Optional, List
-from fastapi import APIRouter, Depends, Query, Path, Body
-from sqlalchemy.ext.asyncio import AsyncSession
+"""Support API routes for会话状态管理."""
+from typing import Literal
+
+from fastapi import APIRouter, Depends, File, Path, Query, UploadFile
+
+from app.auth import get_operator_context
+from app.config import settings
 from app.database import get_db
-from app.schemas.support import (
-    ConversationListResponse,
-    ConversationDetailResponse,
-    ConversationSearchParams,
-    ConversationResponse,
-    AssignConversationRequest,
-    UpdateConversationStatusRequest,
-    SendMessageRequest,
-    BatchSendMessageRequest,
-    BatchSendMessageResponse,
-    QuickReplyCreate,
-    QuickReplyUpdate,
-    QuickReplyResponse,
-    QuickReplyListResponse
-)
 from app.schemas.common import Response
-from app.services.support_service import SupportService
-import logging
+from app.schemas.support import (
+    SupportConversationCreateRequest,
+    SupportConversationCreateResponse,
+    SupportConversationDetailResponse,
+    SupportConversationListResponse,
+    SupportConversationQuery,
+    SupportConversationStatusUpdateRequest,
+    SupportImLookupRequest,
+    SupportImLookupResponse,
+    SupporterListResponse,
+    SupportQuickMessageCreateRequest,
+    SupportQuickMessageItem,
+    SupportQuickMessageListResponse,
+    SupportQuickMessageUpdateRequest,
+    SupportQuickMessageUploadResponse,
+)
+from app.services.support_service import SupportService, SupportQuickMessageService
 
 router = APIRouter()
-logger = logging.getLogger(__name__)
 
 
-# Conversation Routes
-@router.get("/conversations", response_model=Response[ConversationListResponse])
-async def get_conversations(
-    status: Optional[str] = Query(None, description="pending, in_progress, later, ended"),
-    user_id: Optional[str] = Query(None, description="Filter by user ID"),
-    has_unread: Optional[bool] = Query(None, description="Filter by unread status"),
-    sort_by: str = Query("priority", description="Sort by: priority, last_message_at, created_at, unread_count"),
+@router.post("/conversations", response_model=Response[SupportConversationCreateResponse])
+async def create_or_update_conversation(
+    payload: SupportConversationCreateRequest,
+    db=Depends(get_db),
+):
+    """创建或刷新会话，状态默认pending。"""
+    service = SupportService(db)
+    result = await service.create_or_update_conversation(payload)
+    return Response(message="Conversation saved", data=result)
+
+
+@router.get("/conversations", response_model=Response[SupportConversationListResponse])
+async def list_conversations(
+    status: Literal["pending", "processed", "later"] | None = Query(None, description="pending/processed/later"),
+    uid: str | None = Query(None, description="支持模糊匹配"),
+    username: str | None = Query(None),
+    display_name: str | None = Query(None),
+    wallet_address: str | None = Query(None),
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
-    db: AsyncSession = Depends(get_db),
-    # operator_id: str = Depends(get_current_user),  # TODO: Add auth
+    page_size: int = Query(10, ge=1, le=100),
+    db=Depends(get_db),
 ):
-    """
-    Get support conversation list.
-
-    Status filtering:
-    - pending: New conversations + later conversations with new messages
-    - in_progress: Being handled by operator
-    - later: Marked for later follow-up (no new messages)
-    - ended: Closed conversations
-    """
-    operator_id = "admin"  # TODO: Get from auth
-
-    params = ConversationSearchParams(
+    """分页获取会话列表。"""
+    query = SupportConversationQuery(
         status=status,
-        user_id=user_id,
-        has_unread=has_unread,
-        sort_by=sort_by,
+        uid=uid,
+        username=username,
+        display_name=display_name,
+        wallet_address=wallet_address,
         page=page,
-        page_size=page_size
+        page_size=page_size,
     )
-
-    support_service = SupportService(db)
-    result = await support_service.get_conversations(params, operator_id=operator_id)
-
-    return Response(data=result)
+    service = SupportService(db)
+    data = await service.list_conversations(query)
+    return Response(data=data)
 
 
-@router.get("/conversations/{conversation_id}", response_model=Response[ConversationDetailResponse])
+@router.get(
+    "/conversations/{conversation_id}",
+    response_model=Response[SupportConversationDetailResponse],
+)
 async def get_conversation_detail(
-    conversation_id: str = Path(..., description="Conversation ID"),
-    db: AsyncSession = Depends(get_db),
-    # operator_id: str = Depends(get_current_user),  # TODO: Add auth
+    conversation_id: str = Path(..., description="会话ID"),
+    db=Depends(get_db),
 ):
-    """
-    Get conversation detail with messages from OpenIM.
-
-    Returns conversation info and message history.
-    Automatically marks conversation as read for operator.
-    """
-    operator_id = "admin"  # TODO: Get from auth
-
-    support_service = SupportService(db)
-    result = await support_service.get_conversation_detail(conversation_id, operator_id)
-
-    return Response(data=result)
+    """获取会话详情及用户资料。"""
+    service = SupportService(db)
+    detail = await service.get_conversation_detail(conversation_id)
+    return Response(data=detail)
 
 
-@router.post("/conversations/{conversation_id}/assign", response_model=Response[ConversationResponse])
-async def assign_conversation(
-    conversation_id: str = Path(..., description="Conversation ID"),
-    request: AssignConversationRequest = Body(...),
-    db: AsyncSession = Depends(get_db),
-    # operator_id: str = Depends(get_current_user),  # TODO: Add auth
-):
-    """
-    Assign conversation to operator.
-
-    Changes status to 'in_progress'.
-    """
-    operator_id = "admin"  # TODO: Get from auth
-
-    support_service = SupportService(db)
-    conv = await support_service.assign_conversation(conversation_id, request.operator_id)
-
-    return Response(
-        message="Conversation assigned successfully",
-        data=ConversationResponse.model_validate(conv)
-    )
-
-
-@router.post("/conversations/{conversation_id}/status", response_model=Response[ConversationResponse])
+@router.post("/conversations/{conversation_id}/status", response_model=Response[dict])
 async def update_conversation_status(
-    conversation_id: str = Path(..., description="Conversation ID"),
-    request: UpdateConversationStatusRequest = Body(...),
-    db: AsyncSession = Depends(get_db),
-    # operator_id: str = Depends(get_current_user),  # TODO: Add auth
+    conversation_id: str,
+    payload: SupportConversationStatusUpdateRequest,
+    operator_ctx=Depends(get_operator_context),
+    db=Depends(get_db),
 ):
-    """
-    Update conversation status.
-
-    Supported status transitions:
-    - later: Mark for later follow-up (稍后回复)
-    - ended: Close conversation (结束对话)
-    - in_progress: Reopen conversation
-    """
-    operator_id = "admin"  # TODO: Get from auth
-
-    support_service = SupportService(db)
-    conv = await support_service.update_conversation_status(
+    """运营点击End/Later时更新会话状态。"""
+    service = SupportService(db)
+    await service.update_status(
         conversation_id,
-        request.status,
-        operator_id
+        payload,
+        operator_ctx.operator_id,
+        operator_ctx.operator_name,
     )
+    return Response(message="Status updated")
 
+
+@router.post("/im-mapping", response_model=Response[SupportImLookupResponse])
+async def lookup_users_by_im_id(
+    payload: SupportImLookupRequest,
+    db=Depends(get_db),
+):
+    """批量将 OpenIM im_id 映射为用户资料。"""
+    service = SupportService(db)
+    data = await service.lookup_users_by_im_ids(payload.im_ids)
+    return Response(data=data)
+
+
+@router.get("/supporters", response_model=Response[SupporterListResponse])
+async def get_supporter_list():
+    """获取客服超级管理员列表（来源于环境配置）。"""
+    supporters = settings.SUPPORT_SUPER_ADMINS or []
     return Response(
-        message=f"Conversation status updated to {request.status}",
-        data=ConversationResponse.model_validate(conv)
+        data=SupporterListResponse(supporters=supporters),
+        message="Supporter list fetched",
     )
 
 
-# Message Routes (via OpenIM)
-@router.post("/conversations/{conversation_id}/messages", response_model=Response[dict])
-async def send_message(
-    conversation_id: str = Path(..., description="Conversation ID"),
-    message: SendMessageRequest = Body(...),
-    db: AsyncSession = Depends(get_db),
-    # operator_id: str = Depends(get_current_user),  # TODO: Add auth
+# ----------------------------- 快捷消息配置 ----------------------------- #
+
+
+@router.get(
+    "/quick-messages",
+    response_model=Response[SupportQuickMessageListResponse],
+)
+async def list_quick_messages(
+    active_only: bool = Query(False, description="仅返回启用的快捷消息"),
+    db=Depends(get_db),
 ):
-    """
-    Send message to user in conversation via OpenIM.
-
-    The message is sent through OpenIM server, ensuring real-time delivery.
-    """
-    operator_id = "admin"  # TODO: Get from auth
-
-    support_service = SupportService(db)
-    success = await support_service.send_message(conversation_id, message, operator_id)
-
-    if success:
-        return Response(message="Message sent successfully")
-    else:
-        return Response(code=500, message="Failed to send message")
+    service = SupportQuickMessageService(db)
+    data = await service.list_quick_messages(active_only)
+    return Response(data=data)
 
 
-@router.post("/conversations/batch-message", response_model=Response[BatchSendMessageResponse])
-async def batch_send_message(
-    batch_request: BatchSendMessageRequest = Body(...),
-    db: AsyncSession = Depends(get_db),
-    # operator_id: str = Depends(get_current_user),  # TODO: Add auth
+@router.post(
+    "/quick-messages",
+    response_model=Response[SupportQuickMessageItem],
+)
+async def create_quick_message(
+    payload: SupportQuickMessageCreateRequest,
+    operator_ctx=Depends(get_operator_context),
+    db=Depends(get_db),
 ):
-    """
-    Send same message to multiple conversations (batch reply).
+    service = SupportQuickMessageService(db)
+    item = await service.create_quick_message(payload, operator_ctx.operator_id)
+    return Response(message="Quick message created", data=item)
 
-    Useful for sending announcements or similar responses to multiple users.
-    """
-    operator_id = "admin"  # TODO: Get from auth
 
-    support_service = SupportService(db)
-    result = await support_service.batch_send_message(batch_request, operator_id)
+@router.put(
+    "/quick-messages/{message_id}",
+    response_model=Response[SupportQuickMessageItem],
+)
+async def update_quick_message(
+    message_id: str,
+    payload: SupportQuickMessageUpdateRequest,
+    operator_ctx=Depends(get_operator_context),
+    db=Depends(get_db),
+):
+    service = SupportQuickMessageService(db)
+    item = await service.update_quick_message(message_id, payload, operator_ctx.operator_id)
+    return Response(message="Quick message updated", data=item)
 
-    return Response(
-        message=f"Batch message sent: {result['success']}/{result['total']} successful",
-        data=BatchSendMessageResponse(**result)
+
+@router.delete(
+    "/quick-messages/{message_id}",
+    response_model=Response[dict],
+)
+async def delete_quick_message(
+    message_id: str,
+    operator_ctx=Depends(get_operator_context),
+    db=Depends(get_db),
+):
+    service = SupportQuickMessageService(db)
+    await service.delete_quick_message(message_id, operator_ctx.operator_id)
+    return Response(message="Quick message deleted", data={})
+
+
+@router.post(
+    "/quick-messages/upload",
+    response_model=Response[SupportQuickMessageUploadResponse],
+)
+async def upload_quick_message_image(
+    file: UploadFile = File(..., description="图片文件"),
+    operator_ctx=Depends(get_operator_context),
+    db=Depends(get_db),
+):
+    data = await file.read()
+    service = SupportQuickMessageService(db)
+    result = await service.upload_image(
+        operator_id=operator_ctx.operator_id,
+        filename=file.filename,
+        content_type=file.content_type,
+        data=data,
     )
-
-
-# Quick Reply Routes
-@router.get("/quick-replies", response_model=Response[QuickReplyListResponse])
-async def get_quick_replies(
-    include_shared: bool = Query(True, description="Include shared quick replies"),
-    db: AsyncSession = Depends(get_db),
-    # operator_id: str = Depends(get_current_user),  # TODO: Add auth
-):
-    """
-    Get quick reply templates for operator.
-
-    Returns operator's own templates and optionally shared templates from other operators.
-    """
-    operator_id = "admin"  # TODO: Get from auth
-
-    support_service = SupportService(db)
-    replies = await support_service.get_quick_replies(operator_id, include_shared)
-
-    return Response(data=QuickReplyListResponse(items=replies, total=len(replies)))
-
-
-@router.post("/quick-replies", response_model=Response[QuickReplyResponse])
-async def create_quick_reply(
-    reply_data: QuickReplyCreate = Body(...),
-    db: AsyncSession = Depends(get_db),
-    # operator_id: str = Depends(get_current_user),  # TODO: Add auth
-):
-    """
-    Create new quick reply template.
-
-    Can be marked as shared for other operators to use.
-    """
-    operator_id = "admin"  # TODO: Get from auth
-
-    support_service = SupportService(db)
-    reply = await support_service.create_quick_reply(reply_data, operator_id)
-
-    return Response(
-        message="Quick reply created successfully",
-        data=QuickReplyResponse.model_validate(reply)
-    )
-
-
-@router.put("/quick-replies/{reply_id}", response_model=Response[QuickReplyResponse])
-async def update_quick_reply(
-    reply_id: int = Path(..., description="Quick reply ID"),
-    reply_data: QuickReplyUpdate = Body(...),
-    db: AsyncSession = Depends(get_db),
-    # operator_id: str = Depends(get_current_user),  # TODO: Add auth
-):
-    """Update quick reply template."""
-    operator_id = "admin"  # TODO: Get from auth
-
-    support_service = SupportService(db)
-    reply = await support_service.update_quick_reply(reply_id, reply_data, operator_id)
-
-    return Response(
-        message="Quick reply updated successfully",
-        data=QuickReplyResponse.model_validate(reply)
-    )
-
-
-@router.delete("/quick-replies/{reply_id}", response_model=Response[dict])
-async def delete_quick_reply(
-    reply_id: int = Path(..., description="Quick reply ID"),
-    db: AsyncSession = Depends(get_db),
-    # operator_id: str = Depends(get_current_user),  # TODO: Add auth
-):
-    """Delete quick reply template."""
-    operator_id = "admin"  # TODO: Get from auth
-
-    support_service = SupportService(db)
-    await support_service.delete_quick_reply(reply_id, operator_id)
-
-    return Response(message="Quick reply deleted successfully")
-
-
-@router.post("/quick-replies/{reply_id}/use", response_model=Response[dict])
-async def use_quick_reply(
-    reply_id: int = Path(..., description="Quick reply ID"),
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    Increment usage count for quick reply.
-
-    Called when operator uses this quick reply template.
-    """
-    support_service = SupportService(db)
-    await support_service.increment_quick_reply_usage(reply_id)
-
-    return Response(message="Usage count incremented")
+    return Response(message="Image uploaded", data=result)

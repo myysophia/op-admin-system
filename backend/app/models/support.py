@@ -1,58 +1,57 @@
-"""Support and audit models - new tables for OP admin."""
+"""Support conversation model for状态管理."""
 from datetime import datetime
+import uuid
 from typing import Optional
-from sqlalchemy import String, Integer, DateTime, Boolean, Text, JSON, BigInteger, ForeignKey
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy import Boolean, Integer, String, DateTime, Text, JSON
+from sqlalchemy.orm import Mapped, mapped_column
 from app.database import Base
 
 
 class SupportConversation(Base):
-    """Support conversation model - NEW TABLE."""
+    """Customer support conversation."""
+
     __tablename__ = "support_conversations"
 
-    id: Mapped[str] = mapped_column(String, primary_key=True)
-    user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"), nullable=False, index=True)
-    operator_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("users.id"), index=True)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    operator_id: Mapped[Optional[str]] = mapped_column(String(64), index=True)
 
-    # Status: pending (待处理), in_progress (处理中), later (稍后回复), ended (已结束)
-    status: Mapped[str] = mapped_column(String, nullable=False, default="pending", index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", index=True)
+    openim_conversation_id: Mapped[Optional[str]] = mapped_column(String(128), unique=True, index=True)
 
-    # OpenIM conversation ID for chat
-    openim_conversation_id: Mapped[Optional[str]] = mapped_column(String, index=True)
-
-    # Unread message indicator for operator
-    has_unread_messages: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
-    unread_count: Mapped[int] = mapped_column(Integer, default=0)
-
-    # Last message info
+    last_message: Mapped[Optional[str]] = mapped_column(Text)
     last_message_at: Mapped[Optional[datetime]] = mapped_column(DateTime, index=True)
-    last_message_from: Mapped[Optional[str]] = mapped_column(String)  # user or operator
-    last_message_preview: Mapped[Optional[str]] = mapped_column(String(200))
+    messages: Mapped[Optional[list]] = mapped_column(JSON, default=list)
 
-    # Resolution time (when status changed to 'ended')
+    task_id: Mapped[Optional[str]] = mapped_column(String(128))
+    device_type: Mapped[Optional[str]] = mapped_column(String(64))
+    device_id: Mapped[Optional[str]] = mapped_column(String(128))
+    app_version: Mapped[Optional[str]] = mapped_column(String(32))
+
+    operator_name: Mapped[Optional[str]] = mapped_column(String(128))
     resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    # Relationships
-    user = relationship("User", foreign_keys=[user_id])
-    operator = relationship("User", foreign_keys=[operator_id])
 
+class SupportQuickMessage(Base):
+    """Support快捷回复模板."""
 
-class QuickReply(Base):
-    """Quick reply template model - NEW TABLE."""
-    __tablename__ = "quick_replies"
+    __tablename__ = "support_quick_messages"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    operator_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"), nullable=False, index=True)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     title: Mapped[str] = mapped_column(String(100), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    usage_count: Mapped[int] = mapped_column(Integer, default=0)
-    is_shared: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    image_key: Mapped[Optional[str]] = mapped_column(String(255))
+    image_url: Mapped[Optional[str]] = mapped_column(Text)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+
+    created_by: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_by_name: Mapped[Optional[str]] = mapped_column(String(128))
+    updated_by: Mapped[Optional[str]] = mapped_column(String(64))
+    updated_by_name: Mapped[Optional[str]] = mapped_column(String(128))
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-    # Relationships
-    operator = relationship("User")
-
