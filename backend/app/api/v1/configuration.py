@@ -16,10 +16,10 @@ router = APIRouter()
 
 @router.get("/startup-modes", response_model=Response[StartupModeListResponse])
 async def list_startup_modes(
-    mode: str | None = Query("normal", description="启动模式，默认normal"),
-    os: str | None = Query(None, description="按操作系统过滤，如ios/android"),
-    limit: int = Query(10, ge=1, le=100),
-    offset: int = Query(0, ge=0),
+    mode: str | None = Query("normal", description="Startup mode filter, default normal"),
+    os: str | None = Query(None, description="Filter by operating system, e.g. ios/android"),
+    limit: int = Query(10, ge=1, le=100, description="Maximum records returned"),
+    offset: int = Query(0, ge=0, description="Offset used for pagination"),
     db=Depends(get_db),
 ):
     service = ConfigurationService(db)
