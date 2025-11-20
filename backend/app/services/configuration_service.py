@@ -3,23 +3,30 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Dict, List, Optional
+import logging
 
+import httpx
 from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.models.configuration import AppVersion, StartupMode
 from app.schemas.configuration import (
     AppVersionConfigResponse,
     AppVersionConfigUpdateRequest,
     AppVersionInfo,
     AppVersionUpdatePayload,
+    ExternalAppVersionUpdateRequest,
     PlatformVersionInfo,
     PlatformVersionUpdate,
+    PublishVersionRequest,
     StartupModeItem,
     StartupModeListResponse,
 )
 from app.services.audit_service import AuditService
+
+logger = logging.getLogger(__name__)
 
 
 class ConfigurationService:
@@ -52,7 +59,11 @@ class ConfigurationService:
         return StartupModeListResponse(items=items)
 
     # ------------------------------------------------------------------ #
-    async def get_app_version_config(self) -> AppVersionConfigResponse:
+    async def get_app_version_config(
+        self,
+        page: int = 1,
+        page_size: int = 10,
+    ) -> AppVersionConfigResponse:
         row_number = func.row_number().over(
             partition_by=(AppVersion.target_os, AppVersion.force_update),
             order_by=[
@@ -99,6 +110,10 @@ class ConfigurationService:
         saved: List[AppVersion] = []
         for entry in entries:
             release_dt = entry.release_date or datetime.utcnow()
+            # Normalize timezone-aware datetimes to naive UTC to match TIMESTAMP WITHOUT TIME ZONE
+            if getattr(release_dt, "tzinfo", None) is not None:
+                release_dt = release_dt.astimezone(tz=None).replace(tzinfo=None)
+
             version = AppVersion(
                 version=entry.version,
                 build=entry.build,
@@ -140,6 +155,132 @@ class ConfigurationService:
         )
 
         return await self.get_app_version_config()
+
+    # ------------------------------------------------------------------ #
+    async def forward_external_app_version(
+        self,
+        payload: ExternalAppVersionUpdateRequest,
+    ) -> Dict[str, object]:
+        """
+        直接调用外部版本更新接口，不在本地落库。
+
+        外部接口：
+        POST {NOTIFICATION_API_URL}/app/update_version?role=write
+        """
+        base_url = settings.NOTIFICATION_API_URL
+        if not base_url:
+            raise HTTPException(status_code=500, detail="外部版本更新接口未配置")
+
+        endpoint = f"{base_url.rstrip('/')}/app/update_version"
+        body = payload.model_dump()
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(
+                    endpoint,
+                    params={"role": "write"},
+                    headers={
+                        "accept": "application/json",
+                        "Content-Type": "application/json",
+                    },
+                    json=body,
+                )
+        except Exception as exc:
+            logger.exception("调用外部版本更新接口失败", extra={"endpoint": endpoint, "payload": body})
+            raise HTTPException(
+                status_code=502,
+                detail=f"调用外部版本更新接口失败: {exc}",
+            ) from exc
+
+        try:
+            data = response.json()
+        except Exception:
+            data = {"raw": response.text}
+
+        if response.status_code != 200:
+            logger.error(
+                "外部版本更新接口返回异常",
+                extra={
+                    "status_code": response.status_code,
+                    "response": data,
+                    "payload": body,
+                },
+            )
+            raise HTTPException(
+                status_code=502,
+                detail=f"外部版本更新接口返回异常状态: {response.status_code}",
+            )
+
+        return {
+            "status_code": response.status_code,
+            "response": data,
+        }
+
+    # ------------------------------------------------------------------ #
+    async def publish_version_to_mode_api(
+        self,
+        payload: PublishVersionRequest,
+    ) -> Dict[str, object]:
+        """
+        Publish a specific build to external mode API.
+
+        External API:
+        PUT {EXTERNAL_MODE_API_URL}
+        Body: { "build": "...", "os": "...", "mode": "normal" }
+        """
+        url = settings.EXTERNAL_MODE_API_URL
+        if not url:
+            raise HTTPException(status_code=500, detail="External mode API URL is not configured")
+
+        body = {
+            "build": payload.build,
+            "os": payload.os,
+            "mode": "normal",  # mode is fixed and not exposed to client
+        }
+
+        try:
+            async with httpx.AsyncClient(
+                timeout=10.0,
+                verify=settings.EXTERNAL_MODE_VERIFY_SSL,
+            ) as client:
+                response = await client.put(
+                    url,
+                    headers={
+                        "accept": "application/json",
+                        "Content-Type": "application/json",
+                    },
+                    json=body,
+                )
+        except Exception as exc:
+            logger.exception("Failed to call external mode API", extra={"url": url, "payload": body})
+            raise HTTPException(
+                status_code=502,
+                detail=f"Failed to call external mode API: {exc}",
+            ) from exc
+
+        try:
+            data = response.json()
+        except Exception:
+            data = {"raw": response.text}
+
+        if response.status_code < 200 or response.status_code >= 300:
+            logger.error(
+                "External mode API returned non-success status",
+                extra={
+                    "status_code": response.status_code,
+                    "response": data,
+                    "payload": body,
+                },
+            )
+            raise HTTPException(
+                status_code=502,
+                detail=f"External mode API returned status: {response.status_code}",
+            )
+
+        return {
+            "status_code": response.status_code,
+            "response": data,
+        }
 
     # ------------------------------------------------------------------ #
     def _extract_entries(self, payload: AppVersionConfigUpdateRequest) -> List["_VersionEntry"]:

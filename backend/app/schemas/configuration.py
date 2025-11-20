@@ -18,6 +18,13 @@ class StartupModeListResponse(BaseModel):
     items: list[StartupModeItem]
 
 
+class PublishVersionRequest(BaseModel):
+    """Publish app build to external mode API."""
+
+    build: str = Field(..., description="Build version string, e.g. 1.2.13")
+    os: str = Field(..., description="Target platform, e.g. ios or android")
+
+
 class AppVersionInfo(BaseModel):
     target_os: str
     version: str
@@ -42,12 +49,12 @@ class AppVersionConfigResponse(BaseModel):
 
 
 class AppVersionUpdatePayload(BaseModel):
-    version: str = Field(..., description="客户端展示的版本号")
-    build: int = Field(..., ge=1, description="内部build号")
-    download_url: Optional[AnyUrl] = Field(default=None, description="安装包地址")
-    release_notes: Optional[str] = Field(default=None, description="更新提示文案")
-    release_date: Optional[datetime] = Field(default=None, description="发布时间，不填默认当前时间")
-    extra: Optional[Dict[str, Any]] = Field(default=None, description="附加配置，JSON结构")
+    version: str = Field(..., description="Human readable version string, e.g. 1.2.6")
+    build: int = Field(..., ge=1, description="Internal build number")
+    download_url: Optional[AnyUrl] = Field(default=None, description="Optional download URL for the app binary")
+    release_notes: Optional[str] = Field(default=None, description="Release notes shown to end users")
+    release_date: Optional[datetime] = Field(default=None, description="Release time; defaults to current time if omitted")
+    extra: Optional[Dict[str, Any]] = Field(default=None, description="Additional JSON configuration for this version")
 
 
 class PlatformVersionUpdate(BaseModel):
@@ -58,3 +65,18 @@ class PlatformVersionUpdate(BaseModel):
 class AppVersionConfigUpdateRequest(BaseModel):
     ios: Optional[PlatformVersionUpdate] = None
     android: Optional[PlatformVersionUpdate] = None
+
+
+class ExternalAppVersionUpdateRequest(BaseModel):
+    """Request body forwarded to external version upgrade API (fields aligned with external service)."""
+
+    version: str = Field(..., description="Human readable version string, e.g. 1.2.6")
+    build: int = Field(..., ge=0, description="Internal build number")
+    target_os: str = Field(..., description="Target platform, e.g. ios or android")
+    release_date: Optional[datetime] = Field(
+        default=None,
+        description="Release time in ISO8601; if omitted, external service decides",
+    )
+    release_notes: Optional[str] = Field(default=None, description="Release notes displayed to end users")
+    download_url: Optional[AnyUrl] = Field(default=None, description="Download URL for the app binary")
+    force_update: bool = Field(default=False, description="Whether this version requires a mandatory upgrade")

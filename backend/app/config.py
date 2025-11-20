@@ -37,6 +37,7 @@ class Settings(BaseSettings):
 
     # CORS
     CORS_ORIGINS: List[str] = ["http://localhost:3000"]
+    CORS_ORIGIN_REGEX: Optional[str] = None
 
     # Pagination
     DEFAULT_PAGE_SIZE: int = 10
@@ -62,6 +63,10 @@ class Settings(BaseSettings):
 
     # External user management APIs
     EXTERNAL_USER_API_URL: Optional[str] = None
+
+    # External mode configuration API (Web3 display / startup mode)
+    EXTERNAL_MODE_API_URL: Optional[str] = None
+    EXTERNAL_MODE_VERIFY_SSL: bool = True
 
     # Recommendation / Post Weighting
     POST_WEIGHT_API_URL: Optional[str] = None
