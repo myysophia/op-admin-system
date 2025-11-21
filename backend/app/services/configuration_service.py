@@ -23,6 +23,7 @@ from app.schemas.configuration import (
     PublishVersionRequest,
     StartupModeItem,
     StartupModeListResponse,
+    StartupModeUpdateRequest,
 )
 from app.services.audit_service import AuditService
 
@@ -57,6 +58,47 @@ class ConfigurationService:
         rows = result.scalars().all()
         items = [StartupModeItem.model_validate(row) for row in rows]
         return StartupModeListResponse(items=items)
+
+    # ------------------------------------------------------------------ #
+    async def add_startup_modes(
+        self,
+        payload: StartupModeUpdateRequest,
+        operator_id: str,
+        operator_name: str,
+    ) -> StartupModeListResponse:
+        if not payload.items:
+            raise HTTPException(status_code=400, detail="No startup mode entries provided")
+
+        for item in payload.items:
+            stmt = select(StartupMode).where(
+                StartupMode.os == item.os,
+                StartupMode.build == item.build,
+            )
+            existing = await self.db.scalar(stmt)
+            if existing:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Startup mode for os={item.os}, build={item.build} already exists",
+                )
+
+        for item in payload.items:
+            record = StartupMode(os=item.os, build=item.build, mode=item.mode)
+            self.db.add(record)
+
+        await self.db.commit()
+
+        await self.audit_service.log_action(
+            operator_id=operator_id,
+            action_type="configuration_startup_mode_create",
+            target_type="startup_mode",
+            target_id="startup_modes",
+            action_details={
+                "operator_name": operator_name,
+                "items": [detail.model_dump() for detail in payload.items],
+            },
+        )
+
+        return await self.list_startup_modes(mode="normal")
 
     # ------------------------------------------------------------------ #
     async def get_app_version_config(

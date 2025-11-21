@@ -18,6 +18,16 @@ class StartupModeListResponse(BaseModel):
     items: list[StartupModeItem]
 
 
+class StartupModeUpdateItem(BaseModel):
+    os: str = Field(..., description="Target OS, e.g. ios/android")
+    build: str = Field(..., description="Build version string")
+    mode: str = Field(default="normal", description="Startup mode, e.g. normal/strict")
+
+
+class StartupModeUpdateRequest(BaseModel):
+    items: list[StartupModeUpdateItem] = Field(..., min_items=1, description="Startup mode entries to add")
+
+
 class PublishVersionRequest(BaseModel):
     """Publish app build to external mode API."""
 

@@ -10,6 +10,7 @@ from app.schemas.configuration import (
     ExternalAppVersionUpdateRequest,
     PublishVersionRequest,
     StartupModeListResponse,
+    StartupModeUpdateRequest,
 )
 from app.services.configuration_service import ConfigurationService
 
@@ -30,7 +31,26 @@ async def list_startup_modes(
     return Response(data=data)
 
 
-@router.get("/app-versions", response_model=Response[AppVersionConfigResponse])
+@router.post(
+    "/web3-display-version",
+    response_model=Response[StartupModeListResponse],
+)
+async def create_startup_mode(
+    payload: StartupModeUpdateRequest,
+    operator_ctx=Depends(get_operator_context),
+    db=Depends(get_db),
+):
+    """Create new startup mode entries for Web3 display."""
+    service = ConfigurationService(db)
+    data = await service.add_startup_modes(payload, operator_ctx.operator_id, operator_ctx.operator_name)
+    return Response(message="Startup mode created", data=data)
+
+
+@router.get(
+    "/upgrade/app-versions",
+    response_model=Response[AppVersionConfigResponse],
+    include_in_schema=False,
+)
 async def get_app_versions(
     page: int = Query(1, ge=1, description="Page index (1-based)"),
     page_size: int = Query(10, ge=1, le=100, description="Page size"),
@@ -44,7 +64,7 @@ async def get_app_versions(
     return Response(data=data)
 
 
-@router.put("/app-versions", response_model=Response[AppVersionConfigResponse])
+@router.put("/upgrade/app-versions", response_model=Response[AppVersionConfigResponse])
 async def update_app_versions(
     payload: AppVersionConfigUpdateRequest,
     operator_ctx=Depends(get_operator_context),
@@ -61,7 +81,7 @@ async def update_app_versions(
 
 
 @router.post(
-    "/app-versions/upgrade",
+    "/upgrade/app-versions/forward",
     response_model=Response[dict],
     include_in_schema=False,
 )
@@ -76,7 +96,11 @@ async def upgrade_app_version(
     return Response(message="External app version updated", data=data)
 
 
-@router.post("/publish-version", response_model=Response[dict])
+@router.post(
+    "/review/publish-version",
+    response_model=Response[dict],
+    include_in_schema=False,
+)
 async def publish_version(
     payload: PublishVersionRequest,
     operator_ctx=Depends(get_operator_context),
