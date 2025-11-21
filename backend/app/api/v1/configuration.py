@@ -27,7 +27,7 @@ async def list_startup_modes(
     """List startup modes for Web3 display configuration."""
     service = ConfigurationService(db)
     # Mode is fixed to 'normal' for this API.
-    data = await service.list_startup_modes("normal", os, limit, offset)
+    data = await service.list_startup_modes("strict", os, limit, offset)
     return Response(data=data)
 
 
