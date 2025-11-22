@@ -36,14 +36,8 @@ class PublishVersionRequest(BaseModel):
 
 
 class AppVersionInfo(BaseModel):
-    target_os: str
     version: str
-    build: int
-    release_notes: Optional[str] = None
-    download_url: Optional[AnyUrl] = None
-    release_date: datetime
-    force_update: bool
-    extra: Optional[Dict[str, Any]] = None
+    prompt: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 

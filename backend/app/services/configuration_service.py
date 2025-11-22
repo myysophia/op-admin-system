@@ -126,7 +126,10 @@ class ConfigurationService:
         for version_obj, rank in result.all():
             if rank != 1:
                 continue
-            info = AppVersionInfo.model_validate(version_obj)
+            info = AppVersionInfo(
+                version=version_obj.version,
+                prompt=version_obj.release_notes,
+            )
             slot = "mandatory" if version_obj.force_update else "optional"
             platform_key = version_obj.target_os.lower()
             if platform_key not in platforms:
@@ -399,7 +402,7 @@ class _VersionEntry:
         self.build = getattr(payload, "build", None)
         self.download_url = None
         self.release_notes = prompt
-        self.release_date = None
+        self.release_date = datetime.utcnow()
         self.extra = None
 
     @classmethod
