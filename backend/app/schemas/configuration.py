@@ -60,11 +60,6 @@ class AppVersionConfigResponse(BaseModel):
 
 class AppVersionUpdatePayload(BaseModel):
     version: str = Field(..., description="Human readable version string, e.g. 1.2.6")
-    build: int = Field(..., ge=1, description="Internal build number")
-    download_url: Optional[AnyUrl] = Field(default=None, description="Optional download URL for the app binary")
-    release_notes: Optional[str] = Field(default=None, description="Release notes shown to end users")
-    release_date: Optional[datetime] = Field(default=None, description="Release time; defaults to current time if omitted")
-    extra: Optional[Dict[str, Any]] = Field(default=None, description="Additional JSON configuration for this version")
 
 
 class PlatformVersionUpdate(BaseModel):
@@ -75,6 +70,14 @@ class PlatformVersionUpdate(BaseModel):
 class AppVersionConfigUpdateRequest(BaseModel):
     ios: Optional[PlatformVersionUpdate] = None
     android: Optional[PlatformVersionUpdate] = None
+    optional_prompt: Optional[str] = Field(
+        default=None,
+        description="Update prompt shown for optional upgrades (applies to all platforms)",
+    )
+    mandatory_prompt: Optional[str] = Field(
+        default=None,
+        description="Update prompt shown for mandatory upgrades (applies to all platforms)",
+    )
 
 
 class ExternalAppVersionUpdateRequest(BaseModel):

@@ -156,15 +156,19 @@ class ConfigurationService:
             if getattr(release_dt, "tzinfo", None) is not None:
                 release_dt = release_dt.astimezone(tz=None).replace(tzinfo=None)
 
+            build_value = entry.build
+            if build_value is None:
+                build_value = await self._get_next_build_number(entry.target_os)
+
             version = AppVersion(
                 version=entry.version,
-                build=entry.build,
+                build=build_value,
                 target_os=entry.target_os,
                 force_update=entry.force_update,
                 release_notes=entry.release_notes,
-                download_url=str(entry.download_url) if entry.download_url else None,
+                download_url=None,
                 release_date=release_dt,
-                extra=entry.extra,
+                extra=None,
                 created_at=datetime.utcnow(),
                 updated_at=datetime.utcnow(),
             )
@@ -327,13 +331,20 @@ class ConfigurationService:
     # ------------------------------------------------------------------ #
     def _extract_entries(self, payload: AppVersionConfigUpdateRequest) -> List["_VersionEntry"]:
         entries: List[_VersionEntry] = []
+        optional_prompt = payload.optional_prompt
+        mandatory_prompt = payload.mandatory_prompt
+
         if payload.ios:
             entries.extend(
-                self._build_entries_for_platform("ios", payload.ios)
+                self._build_entries_for_platform(
+                    "ios", payload.ios, optional_prompt, mandatory_prompt
+                )
             )
         if payload.android:
             entries.extend(
-                self._build_entries_for_platform("android", payload.android)
+                self._build_entries_for_platform(
+                    "android", payload.android, optional_prompt, mandatory_prompt
+                )
             )
         return entries
 
@@ -341,17 +352,34 @@ class ConfigurationService:
         self,
         platform: str,
         config: PlatformVersionUpdate,
+        optional_prompt: Optional[str],
+        mandatory_prompt: Optional[str],
     ) -> List["_VersionEntry"]:
         platform_entries: List[_VersionEntry] = []
         if config.optional:
             platform_entries.append(
-                _VersionEntry.from_payload(platform, False, config.optional)
+                _VersionEntry.from_payload(
+                    platform,
+                    False,
+                    config.optional,
+                    optional_prompt,
+                )
             )
         if config.mandatory:
             platform_entries.append(
-                _VersionEntry.from_payload(platform, True, config.mandatory)
+                _VersionEntry.from_payload(
+                    platform,
+                    True,
+                    config.mandatory,
+                    mandatory_prompt,
+                )
             )
         return platform_entries
+
+    async def _get_next_build_number(self, target_os: str) -> int:
+        stmt = select(func.max(AppVersion.build)).where(AppVersion.target_os == target_os)
+        max_build = await self.db.scalar(stmt)
+        return (max_build or 0) + 1
 
 
 class _VersionEntry:
@@ -363,15 +391,16 @@ class _VersionEntry:
         target_os: str,
         force_update: bool,
         payload: AppVersionUpdatePayload,
+        prompt: Optional[str],
     ) -> None:
         self.target_os = target_os
         self.force_update = force_update
         self.version = payload.version
-        self.build = payload.build
-        self.download_url = payload.download_url
-        self.release_notes = payload.release_notes
-        self.release_date = payload.release_date
-        self.extra = payload.extra
+        self.build = getattr(payload, "build", None)
+        self.download_url = None
+        self.release_notes = prompt
+        self.release_date = None
+        self.extra = None
 
     @classmethod
     def from_payload(
@@ -379,5 +408,6 @@ class _VersionEntry:
         target_os: str,
         force_update: bool,
         payload: AppVersionUpdatePayload,
+        prompt: Optional[str],
     ) -> "_VersionEntry":
-        return cls(target_os=target_os, force_update=force_update, payload=payload)
+        return cls(target_os=target_os, force_update=force_update, payload=payload, prompt=prompt)
