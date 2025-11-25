@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     OPENIM_SECRET: str
     OPENIM_ADMIN_USER_ID: str = "admin"
     OPENIM_PLATFORM_ID: int = 1
+    OPENIM_VERIFY_SSL: bool = True
+    OPENIM_ADMIN_TOKEN: Optional[str] = None
 
     # CORS
     CORS_ORIGINS: List[str] = ["http://localhost:3000"]

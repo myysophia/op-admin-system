@@ -82,13 +82,13 @@ class SupportConversationDetailResponse(BaseModel):
 
 
 class SupportConversationStatusUpdateRequest(BaseModel):
-    """更新会话状态请求."""
-    status: Literal["pending", "processed", "later"]
+    """更新会话状态请求（pending/processed）。"""
+    status: Literal["pending", "processed"]
 
 
 class SupportConversationQuery(BaseModel):
     """会话查询参数."""
-    status: Optional[Literal["pending", "processed", "later"]] = None
+    status: Optional[Literal["pending", "processed"]] = None
     uid: Optional[str] = None
     username: Optional[str] = None
     display_name: Optional[str] = None
@@ -117,6 +117,46 @@ class SupportImLookupItem(BaseModel):
 class SupportImLookupResponse(BaseModel):
     """批量IM映射响应."""
     items: List[SupportImLookupItem]
+
+
+# ------------------------------- Support Cases ------------------------------- #
+
+
+class SupportCaseBase(BaseModel):
+    title: str = Field(..., max_length=255, description="Case 标题")
+    comment: Optional[str] = Field(default=None, description="备注/描述")
+    status: Optional[str] = Field(default="open", description="状态，如 open/closed")
+
+
+class SupportCaseCreateRequest(SupportCaseBase):
+    user_id: str = Field(..., description="用户ID")
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class SupportCaseUpdateRequest(BaseModel):
+    title: Optional[str] = Field(default=None, max_length=255)
+    comment: Optional[str] = None
+    status: Optional[str] = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class SupportCaseItem(SupportCaseBase):
+    id: str
+    user_id: str
+    support_id: str
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SupportCaseListResponse(BaseModel):
+    items: List[SupportCaseItem]
+    total: int
+    page: int
+    page_size: int
 
 
 # ------------------------------- 快捷消息 ------------------------------- #

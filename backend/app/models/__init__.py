@@ -2,7 +2,7 @@
 from app.models.user import User, Author, UserWallet, Ban
 from app.models.post import Post, Image, Video, Collection, Pair
 from app.models.post_weight import PostWeight
-from app.models.support import SupportConversation, SupportQuickMessage
+from app.models.support import SupportConversation, SupportQuickMessage, SupportChatStatus, SupportCase
 from app.models.configuration import StartupMode, AppVersion
 from app.models.audit import OperatorAuditLog
 from app.models.ban_history import BanHistory
@@ -24,7 +24,9 @@ __all__ = [
 
     # Support models (new tables)
     "SupportConversation",
+    "SupportChatStatus",
     "SupportQuickMessage",
+    "SupportCase",
     "OperatorAuditLog",
     "BanHistory",
 

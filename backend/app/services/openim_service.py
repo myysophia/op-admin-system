@@ -1,6 +1,7 @@
 """OpenIM integration service for chat functionality."""
 import httpx
 import logging
+import time
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from app.config import settings
@@ -17,6 +18,7 @@ class OpenIMService:
         self.secret = settings.OPENIM_SECRET
         self.admin_user_id = settings.OPENIM_ADMIN_USER_ID
         self.platform_id = settings.OPENIM_PLATFORM_ID
+        self.verify_ssl = getattr(settings, "OPENIM_VERIFY_SSL", True)
 
     async def get_token(self, user_id: str = None) -> Optional[str]:
         """
@@ -28,24 +30,60 @@ class OpenIMService:
         Returns:
             Token string if successful
         """
+        # 优先使用环境中显式提供的管理token，避免因证书或鉴权失败导致不可用
+        if settings.OPENIM_ADMIN_TOKEN:
+            return settings.OPENIM_ADMIN_TOKEN
+
+        target_user = user_id or self.admin_user_id
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(verify=self.verify_ssl) as client:
                 response = await client.post(
                     f"{self.api_url}/auth/user_token",
+                    headers={
+                        "operationID": str(int(time.time() * 1000)),
+                    },
                     json={
                         "secret": self.secret,
                         "platform_id": self.platform_id,
-                        "user_id": user_id or self.admin_user_id
+                        "user_id": target_user,
                     },
-                    timeout=10.0
+                    timeout=10.0,
                 )
-                if response.status_code == 200:
-                    data = response.json()
-                    return data.get("data", {}).get("token")
-                else:
-                    logger.error(f"Failed to get token: {response.text}")
-        except Exception as e:
-            logger.error(f"Error getting OpenIM token: {e}")
+                if response.status_code != 200:
+                    logger.error(
+                        "Failed to get token (HTTP): status=%s verify_ssl=%s url=%s admin=%s body=%s",
+                        response.status_code,
+                        self.verify_ssl,
+                        self.api_url,
+                        target_user,
+                        response.text,
+                    )
+                    return None
+
+                data = response.json()
+                err_code = data.get("errCode")
+                if err_code not in (0, None):
+                    logger.error(
+                        "Failed to get token (OpenIM errCode): errCode=%s errMsg=%s errDlt=%s admin=%s",
+                        err_code,
+                        data.get("errMsg"),
+                        data.get("errDlt"),
+                        target_user,
+                    )
+                    return None
+
+                token = data.get("data", {}).get("token")
+                if not token:
+                    logger.error("Failed to get token: response missing token, admin=%s", target_user)
+                return token
+        except Exception as e:  # pylint: disable=broad-except
+            logger.error(
+                "Error getting OpenIM token: %s (verify_ssl=%s url=%s admin=%s)",
+                e,
+                self.verify_ssl,
+                self.api_url,
+                target_user,
+            )
         return None
 
     async def send_message(
@@ -73,7 +111,7 @@ class OpenIMService:
                 logger.error("Failed to get OpenIM token")
                 return False
 
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(verify=self.verify_ssl) as client:
                 response = await client.post(
                     f"{self.api_url}/msg/send_msg",
                     headers={"token": token},
@@ -135,6 +173,58 @@ class OpenIMService:
         )
         return results
 
+    async def get_sorted_conversation_list(
+        self,
+        *,
+        owner_user_id: str,
+        page_number: int,
+        page_size: int,
+        conversation_ids: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """调用OpenIM获取会话列表，按时间倒序，带最近一条消息。"""
+
+        token = await self.get_token()
+        if not token:
+            logger.error("Failed to get OpenIM admin token")
+            return {}
+
+        payload = {
+            "userID": owner_user_id,
+            "conversationIDs": conversation_ids or [],
+            "pagination": {
+                "pageNumber": page_number,
+                "showNumber": page_size,
+            },
+        }
+
+        headers = {
+            "token": token,
+            "operationID": str(int(time.time() * 1000)),
+        }
+
+        try:
+            async with httpx.AsyncClient(verify=self.verify_ssl) as client:
+                response = await client.post(
+                    f"{self.api_url}/conversation/get_sorted_conversation_list",
+                    headers=headers,
+                    json=payload,
+                    timeout=10.0,
+                )
+                if response.status_code != 200:
+                    logger.error(f"OpenIM conversation list failed: {response.text}")
+                    return {}
+
+                data = response.json()
+                if data.get("errCode") != 0:
+                    logger.error(f"OpenIM conversation list error: {data}")
+                    return {}
+
+                return data.get("data") or {}
+
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.error(f"Error fetching OpenIM conversation list: {exc}")
+            return {}
+
     async def get_conversation_messages(
         self,
         user_id: str,
@@ -159,7 +249,7 @@ class OpenIMService:
             if not token:
                 return []
 
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(verify=self.verify_ssl) as client:
                 response = await client.post(
                     f"{self.api_url}/msg/get_conversation_msg",
                     headers={"token": token},
@@ -206,7 +296,7 @@ class OpenIMService:
             if not token:
                 return 0
 
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(verify=self.verify_ssl) as client:
                 response = await client.post(
                     f"{self.api_url}/conversation/get_conversation",
                     headers={"token": token},
@@ -249,7 +339,7 @@ class OpenIMService:
             if not token:
                 return False
 
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(verify=self.verify_ssl) as client:
                 response = await client.post(
                     f"{self.api_url}/msg/mark_msgs_as_read",
                     headers={"token": token},

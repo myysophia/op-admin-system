@@ -22,13 +22,150 @@ from app.schemas.support import (
     SupportQuickMessageListResponse,
     SupportQuickMessageUpdateRequest,
     SupportQuickMessageUploadResponse,
+    SupportCaseCreateRequest,
+    SupportCaseUpdateRequest,
+    SupportCaseListResponse,
+    SupportCaseItem,
 )
 from app.services.support_service import SupportService, SupportQuickMessageService
 
 router = APIRouter()
 
 
-@router.post("/conversations", response_model=Response[SupportConversationCreateResponse])
+# ----------------------------- 新版聊天列表 & 状态 ----------------------------- #
+
+
+@router.get(
+    "/chats",
+    response_model=Response[SupportConversationListResponse],
+    summary="获取聊天列表（OpenIM拉取+本地状态合并）",
+    include_in_schema=False,
+)
+async def list_chat_sessions(
+    status: Literal["pending", "processed"] | None = Query(None, description="状态过滤"),
+    uid: str | None = Query(None, description="用户ID模糊"),
+    username: str | None = Query(None),
+    display_name: str | None = Query(None),
+    wallet_address: str | None = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=100),
+    db=Depends(get_db),
+):
+    """新版：直接从OpenIM获取会话列表，合并本地状态，仅返回列表和状态，不含消息内容。"""
+    query = SupportConversationQuery(
+        status=status,
+        uid=uid,
+        username=username,
+        display_name=display_name,
+        wallet_address=wallet_address,
+        page=page,
+        page_size=page_size,
+    )
+    service = SupportService(db)
+    data = await service.list_conversations(query)
+    return Response(data=data)
+
+
+@router.patch(
+    "/chats/{conversation_id}/status",
+    response_model=Response[dict],
+    summary="更新聊天状态（pending/processed）",
+    include_in_schema=False,
+)
+async def patch_chat_status(
+    conversation_id: str,
+    payload: SupportConversationStatusUpdateRequest,
+    operator_ctx=Depends(get_operator_context),
+    db=Depends(get_db),
+):
+    """新版：仅更新本地状态表，不写入消息。"""
+    service = SupportService(db)
+    await service.update_status(
+        conversation_id,
+        payload,
+        operator_ctx.operator_id,
+        operator_ctx.operator_name,
+    )
+    return Response(message="Status updated")
+
+
+# ----------------------------- Support Cases ----------------------------- #
+
+
+@router.post(
+    "/cases",
+    response_model=Response[SupportCaseItem],
+)
+async def create_support_case(
+    payload: SupportCaseCreateRequest,
+    db=Depends(get_db),
+):
+    service = SupportService(db)
+    item = await service.create_case(payload)
+    return Response(message="Support case created", data=item)
+
+
+@router.get(
+    "/cases",
+    response_model=Response[SupportCaseListResponse],
+)
+async def list_support_cases(
+    status: str | None = Query(None, description="Filter by status, e.g. open/closed"),
+    user_id: str | None = Query(None, description="Filter by user id"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=100),
+    db=Depends(get_db),
+):
+    service = SupportService(db)
+    data = await service.list_cases(page=page, page_size=page_size, status=status, user_id=user_id)
+    return Response(data=data)
+
+
+@router.get(
+    "/cases/{case_id}",
+    response_model=Response[SupportCaseItem],
+)
+async def get_support_case(
+    case_id: str,
+    db=Depends(get_db),
+):
+    service = SupportService(db)
+    item = await service.get_case(case_id)
+    return Response(data=item)
+
+
+@router.put(
+    "/cases/{case_id}",
+    response_model=Response[SupportCaseItem],
+)
+async def update_support_case(
+    case_id: str,
+    payload: SupportCaseUpdateRequest,
+    db=Depends(get_db),
+):
+    service = SupportService(db)
+    item = await service.update_case(case_id, payload)
+    return Response(message="Support case updated", data=item)
+
+
+@router.delete(
+    "/cases/{case_id}",
+    response_model=Response[dict],
+)
+async def delete_support_case(
+    case_id: str,
+    db=Depends(get_db),
+):
+    service = SupportService(db)
+    await service.delete_case(case_id)
+    return Response(message="Support case deleted", data={})
+
+
+@router.post(
+    "/conversations",
+    response_model=Response[SupportConversationCreateResponse],
+    include_in_schema=False,
+)
 async def create_or_update_conversation(
     payload: SupportConversationCreateRequest,
     db=Depends(get_db),
@@ -39,9 +176,13 @@ async def create_or_update_conversation(
     return Response(message="Conversation saved", data=result)
 
 
-@router.get("/conversations", response_model=Response[SupportConversationListResponse])
+@router.get(
+    "/conversations",
+    response_model=Response[SupportConversationListResponse],
+    include_in_schema=False,
+)
 async def list_conversations(
-    status: Literal["pending", "processed", "later"] | None = Query(None, description="pending/processed/later"),
+    status: Literal["pending", "processed"] | None = Query(None, description="pending/processed"),
     uid: str | None = Query(None, description="支持模糊匹配"),
     username: str | None = Query(None),
     display_name: str | None = Query(None),
@@ -68,6 +209,7 @@ async def list_conversations(
 @router.get(
     "/conversations/{conversation_id}",
     response_model=Response[SupportConversationDetailResponse],
+    include_in_schema=False,
 )
 async def get_conversation_detail(
     conversation_id: str = Path(..., description="会话ID"),
@@ -79,7 +221,11 @@ async def get_conversation_detail(
     return Response(data=detail)
 
 
-@router.post("/conversations/{conversation_id}/status", response_model=Response[dict])
+@router.post(
+    "/conversations/{conversation_id}/status",
+    response_model=Response[dict],
+    include_in_schema=False,
+)
 async def update_conversation_status(
     conversation_id: str,
     payload: SupportConversationStatusUpdateRequest,

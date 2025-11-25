@@ -2,18 +2,19 @@
 from __future__ import annotations
 
 from datetime import datetime
+import json
 import mimetypes
 import uuid
 import zlib
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
 from fastapi import HTTPException
-from sqlalchemy import and_, func, select, text
+from sqlalchemy import select, text, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models.support import SupportConversation, SupportQuickMessage
+from app.models.support import SupportQuickMessage, SupportChatStatus, SupportCase
 from app.models.user import Author, User, UserWallet
 from app.schemas.support import (
     SupportConversationCreateRequest,
@@ -21,7 +22,6 @@ from app.schemas.support import (
     SupportConversationDetailResponse,
     SupportConversationListItem,
     SupportConversationListResponse,
-    SupportConversationMessage,
     SupportConversationQuery,
     SupportConversationStatusUpdateRequest,
     SupportConversationUserProfile,
@@ -32,8 +32,13 @@ from app.schemas.support import (
     SupportQuickMessageListResponse,
     SupportQuickMessageUpdateRequest,
     SupportQuickMessageUploadResponse,
+    SupportCaseCreateRequest,
+    SupportCaseUpdateRequest,
+    SupportCaseItem,
+    SupportCaseListResponse,
 )
 from app.services.audit_service import AuditService
+from app.services.openim_service import openim_service
 from app.utils.r2_storage import R2Config, R2StorageClient, R2StorageError
 
 
@@ -64,49 +69,104 @@ class SupportService:
         self.uid_salt = settings.AGORA_UID_SALT or "JyzuC2!EPq8@EvF-zdqjdsh6NTpkr_nz"
         self.MAX_UID = 2_147_483_647
 
+
+    # ----------------------------- Support Case CRUD ----------------------------- #
+    async def create_case(self, payload: SupportCaseCreateRequest) -> SupportCaseItem:
+        case = SupportCase(
+            support_id=str(uuid.uuid4()),
+            user_id=payload.user_id,
+            title=payload.title,
+            comment=payload.comment,
+            status=payload.status or "open",
+        )
+        self.db.add(case)
+        await self.db.commit()
+        await self.db.refresh(case)
+        return SupportCaseItem.model_validate(case)
+
+    async def get_case(self, case_id: str) -> SupportCaseItem:
+        stmt = select(SupportCase).where(SupportCase.id == case_id)
+        result = await self.db.execute(stmt)
+        case = result.scalar_one_or_none()
+        if not case:
+            raise HTTPException(status_code=404, detail="Support case not found")
+        return SupportCaseItem.model_validate(case)
+
+    async def list_cases(
+        self,
+        page: int,
+        page_size: int,
+        status: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> SupportCaseListResponse:
+        stmt = select(SupportCase)
+        if status:
+            stmt = stmt.where(SupportCase.status == status)
+        if user_id:
+            stmt = stmt.where(SupportCase.user_id == user_id)
+
+        count_stmt = select(func.count()).select_from(stmt.subquery())
+        total = await self.db.scalar(count_stmt) or 0
+
+        stmt = stmt.order_by(SupportCase.created_at.desc())
+        stmt = stmt.offset((page - 1) * page_size).limit(page_size)
+
+        result = await self.db.execute(stmt)
+        items = [SupportCaseItem.model_validate(row) for row in result.scalars().all()]
+
+        return SupportCaseListResponse(items=items, total=total, page=page, page_size=page_size)
+
+    async def update_case(self, case_id: str, payload: SupportCaseUpdateRequest) -> SupportCaseItem:
+        stmt = select(SupportCase).where(SupportCase.id == case_id)
+        result = await self.db.execute(stmt)
+        case = result.scalar_one_or_none()
+        if not case:
+            raise HTTPException(status_code=404, detail="Support case not found")
+
+        updates = payload.model_dump(exclude_unset=True)
+        if not updates:
+            raise HTTPException(status_code=400, detail="No fields to update")
+
+        for field, value in updates.items():
+            setattr(case, field, value)
+
+        await self.db.commit()
+        await self.db.refresh(case)
+        return SupportCaseItem.model_validate(case)
+
+    async def delete_case(self, case_id: str) -> None:
+        stmt = select(SupportCase).where(SupportCase.id == case_id)
+        result = await self.db.execute(stmt)
+        case = result.scalar_one_or_none()
+        if not case:
+            raise HTTPException(status_code=404, detail="Support case not found")
+        await self.db.delete(case)
+        await self.db.commit()
+
     # ------------------------------------------------------------------ #
     async def create_or_update_conversation(
         self,
         payload: SupportConversationCreateRequest,
     ) -> SupportConversationCreateResponse:
-        """创建或刷新会话，状态重置为pending。"""
-        existing = await self._get_conversation_by_openim(payload.openim_conversation_id)
-        # 校验用户存在
+        """只记录会话状态，不持久化聊天内容。"""
         await self._build_user_profile(payload.user_id)
-        messages = self._merge_messages(existing.messages if existing else None, payload.messages)
 
+        existing = await self._get_status_record(payload.openim_conversation_id)
         if existing:
-            existing.user_id = payload.user_id
             existing.status = "pending"
-            existing.last_message = payload.last_message
-            existing.last_message_at = payload.last_message_at
-            existing.messages = messages
-            existing.task_id = payload.task_id
-            existing.device_type = payload.device_type
-            existing.device_id = payload.device_id
-            existing.app_version = payload.app_version
-            existing.resolved_at = None
-            existing.operator_id = None
-            existing.operator_name = None
+            existing.peer_user_id = existing.peer_user_id or payload.user_id
+            existing.updated_at = datetime.utcnow()
         else:
-            existing = SupportConversation(
-                id=str(uuid.uuid4()),
-                user_id=payload.user_id,
-                openim_conversation_id=payload.openim_conversation_id,
+            existing = SupportChatStatus(
+                conversation_id=payload.openim_conversation_id,
+                peer_user_id=payload.user_id,
                 status="pending",
-                last_message=payload.last_message,
-                last_message_at=payload.last_message_at,
-                messages=messages,
-                task_id=payload.task_id,
-                device_type=payload.device_type,
-                device_id=payload.device_id,
-                app_version=payload.app_version,
             )
             self.db.add(existing)
 
         await self.db.commit()
         return SupportConversationCreateResponse(
-            conversation_id=existing.id,
+            conversation_id=payload.openim_conversation_id,
             status=existing.status,
         )
 
@@ -115,116 +175,124 @@ class SupportService:
         self,
         query: SupportConversationQuery,
     ) -> SupportConversationListResponse:
-        """分页查询会话列表。"""
-        stmt = select(SupportConversation)
+        """从OpenIM拉取会话列表并与本地状态合并。"""
 
-        filters = []
-        if query.status:
-            filters.append(SupportConversation.status == query.status)
-        if query.uid:
-            filters.append(SupportConversation.user_id.ilike(f"%{query.uid}%"))
-        if query.username:
-            author_subq = (
-                select(Author.user_id)
-                .where(Author.username.ilike(f"%{query.username}%"))
-            )
-            filters.append(SupportConversation.user_id.in_(author_subq))
-
-        if query.display_name:
-            display_subq = (
-                select(Author.user_id)
-                .where(Author.name.ilike(f"%{query.display_name}%"))
-            )
-            filters.append(SupportConversation.user_id.in_(display_subq))
-
-        if query.wallet_address:
-            wallet_subq = (
-                select(UserWallet.user_id)
-                .where(UserWallet.pubkey.ilike(f"%{query.wallet_address}%"))
-            )
-            filters.append(SupportConversation.user_id.in_(wallet_subq))
-
-        if filters:
-            stmt = stmt.where(and_(*filters))
-
-        stmt = stmt.order_by(
-            SupportConversation.last_message_at.desc().nullslast(),
-            SupportConversation.created_at.desc(),
+        openim_data = await openim_service.get_sorted_conversation_list(
+            owner_user_id=settings.OPENIM_ADMIN_USER_ID,
+            page_number=query.page,
+            page_size=query.page_size,
         )
+        if not openim_data:
+            raise HTTPException(status_code=502, detail="OpenIM 会话列表不可用")
 
-        total_query = select(func.count()).select_from(stmt.subquery())
-        total = await self.db.scalar(total_query) or 0
+        conversation_elems = openim_data.get("conversationElems") or []
+        conversation_ids = [elem.get("conversationID") for elem in conversation_elems if elem.get("conversationID")]
+        status_map = await self._get_status_map(conversation_ids)
 
-        offset = (query.page - 1) * query.page_size
-        stmt = stmt.offset(offset).limit(query.page_size)
+        peer_user_ids: Set[str] = set()
+        parsed_rows = []
+        for elem in conversation_elems:
+            conv_id = elem.get("conversationID")
+            if not conv_id:
+                continue
+            msg_info = elem.get("msgInfo") or {}
+            peer_user_id = self._extract_peer_user_id(conv_id, msg_info)
+            if peer_user_id:
+                peer_user_ids.add(peer_user_id)
 
-        result = await self.db.execute(stmt)
-        conversations = result.scalars().all()
+            status_row = status_map.get(conv_id)
+            status_value = status_row.status if status_row else "pending"
+            last_message, last_message_at = self._extract_latest_message(msg_info)
 
-        profiles = await self._build_bulk_profiles({conv.user_id for conv in conversations})
+            parsed_rows.append(
+                {
+                    "conversation_id": conv_id,
+                    "peer_user_id": peer_user_id,
+                    "status": status_value,
+                    "last_message": last_message,
+                    "last_message_at": last_message_at,
+                }
+            )
 
-        items = []
-        for conv in conversations:
-            profile = profiles.get(conv.user_id)
+        profiles = await self._build_bulk_profiles(peer_user_ids)
+
+        def _match_filters(row_profile: Optional[SupportConversationUserProfile], row_status: str, peer_user_id: Optional[str]) -> bool:
+            if query.status and row_status != query.status:
+                return False
+            if query.uid and (not peer_user_id or query.uid.lower() not in peer_user_id.lower()):
+                return False
+            if query.username and (not row_profile or not row_profile.username or query.username.lower() not in row_profile.username.lower()):
+                return False
+            if query.display_name and (not row_profile or not row_profile.display_name or query.display_name.lower() not in row_profile.display_name.lower()):
+                return False
+            if query.wallet_address and (not row_profile or not row_profile.wallet_address or query.wallet_address.lower() not in row_profile.wallet_address.lower()):
+                return False
+            return True
+
+        items: List[SupportConversationListItem] = []
+        for row in parsed_rows:
+            profile = profiles.get(row["peer_user_id"])
+            if not _match_filters(profile, row["status"], row["peer_user_id"]):
+                continue
+
             items.append(
                 SupportConversationListItem(
-                    conversation_id=conv.id,
-                    openim_conversation_id=conv.openim_conversation_id,
-                    user_id=conv.user_id,
+                    conversation_id=row["conversation_id"],
+                    openim_conversation_id=row["conversation_id"],
+                    user_id=row["peer_user_id"] or "",
                     username=profile.username if profile else None,
                     display_name=profile.display_name if profile else None,
                     wallet_address=profile.wallet_address if profile else None,
-                    status=conv.status,
-                    last_message=conv.last_message,
-                    last_message_at=conv.last_message_at,
-                    app_version=conv.app_version,
+                    status=row["status"],
+                    last_message=row["last_message"],
+                    last_message_at=row["last_message_at"],
+                    app_version=profile.app_version if profile else None,
                 )
             )
 
+        total_raw = openim_data.get("conversationTotal")
+        try:
+            total_from_openim = int(total_raw) if total_raw is not None else len(conversation_elems)
+        except (TypeError, ValueError):
+            total_from_openim = len(conversation_elems)
+        has_filters = any([
+            query.status,
+            query.uid,
+            query.username,
+            query.display_name,
+            query.wallet_address,
+        ])
+
         return SupportConversationListResponse(
             items=items,
-            total=total,
+            total=len(items) if has_filters else total_from_openim,
             page=query.page,
             page_size=query.page_size,
         )
 
     # ------------------------------------------------------------------ #
     async def get_conversation_detail(self, conversation_id: str) -> SupportConversationDetailResponse:
-        stmt = select(SupportConversation).where(SupportConversation.id == conversation_id)
-        result = await self.db.execute(stmt)
-        conversation = result.scalar_one_or_none()
-        if not conversation:
-            raise HTTPException(status_code=404, detail="Conversation not found")
+        status_row = await self._get_status_record(conversation_id)
+        peer_user_id = status_row.peer_user_id if status_row else self._extract_peer_user_id(conversation_id, None)
 
-        base_profile = await self._build_user_profile(conversation.user_id)
-        base_data = (
-            base_profile.model_dump()  # Pydantic v2
-            if hasattr(base_profile, "model_dump")
-            else base_profile.dict()
-        )
-        base_data.update(
-            {
-                "task_id": conversation.task_id or base_data.get("task_id"),
-                "device_type": conversation.device_type or base_data.get("device_type"),
-                "device_id": conversation.device_id or base_data.get("device_id"),
-                "app_version": conversation.app_version or base_data.get("app_version"),
-            }
-        )
-        merged_profile = SupportConversationUserProfile(**base_data)
+        profile = None
+        if peer_user_id:
+            try:
+                profile = await self._build_user_profile(peer_user_id)
+            except HTTPException:
+                profile = None
 
-        messages = [
-            SupportConversationMessage(**message)
-            for message in (conversation.messages or [])
-        ]
+        if not profile:
+            raise HTTPException(status_code=404, detail="Conversation user not found")
 
         return SupportConversationDetailResponse(
-            conversation_id=conversation.id,
-            openim_conversation_id=conversation.openim_conversation_id,
-            status=conversation.status,
-            last_message=conversation.last_message,
-            last_message_at=conversation.last_message_at,
-            messages=messages,
-            user_profile=merged_profile,
+            conversation_id=conversation_id,
+            openim_conversation_id=conversation_id,
+            status=status_row.status if status_row else "pending",
+            last_message=None,
+            last_message_at=None,
+            messages=[],  # 不持久化消息，需实时从OpenIM拉取时再补充
+            user_profile=profile,
         )
 
     # ------------------------------------------------------------------ #
@@ -235,19 +303,20 @@ class SupportService:
         operator_id: str,
         operator_name: str,
     ) -> None:
-        stmt = select(SupportConversation).where(SupportConversation.id == conversation_id)
-        result = await self.db.execute(stmt)
-        conversation = result.scalar_one_or_none()
+        status_row = await self._get_status_record(conversation_id)
+        if not status_row:
+            status_row = SupportChatStatus(
+                conversation_id=conversation_id,
+                peer_user_id=self._extract_peer_user_id(conversation_id, None),
+                status=payload.status,
+            )
+            self.db.add(status_row)
 
-        if not conversation:
-            raise HTTPException(status_code=404, detail="Conversation not found")
-
-        conversation.status = payload.status
-        conversation.operator_id = operator_id
         resolved_operator_name = await _resolve_operator_display_name(self.db, operator_id, operator_name)
-        conversation.operator_name = resolved_operator_name
-        conversation.resolved_at = datetime.utcnow() if payload.status in {"processed", "later"} else None
-        conversation.updated_at = datetime.utcnow()
+        status_row.status = payload.status
+        status_row.updated_by = operator_id
+        status_row.updated_by_name = resolved_operator_name
+        status_row.updated_at = datetime.utcnow()
 
         await self.db.commit()
 
@@ -255,12 +324,12 @@ class SupportService:
             operator_id=operator_id,
             action_type="support_conversation_status_update",
             target_type="support_conversation",
-            target_id=conversation.id,
+            target_id=conversation_id,
             action_details={
                 "status": payload.status,
                 "operator_name": resolved_operator_name,
             },
-            )
+        )
 
     # ------------------------------------------------------------------ #
     async def lookup_users_by_im_ids(self, im_ids: List[str]) -> SupportImLookupResponse:
@@ -300,27 +369,62 @@ class SupportService:
         return SupportImLookupResponse(items=items)
 
     # ------------------------------------------------------------------ #
-    async def _get_conversation_by_openim(self, openim_id: str) -> SupportConversation | None:
-        stmt = select(SupportConversation).where(SupportConversation.openim_conversation_id == openim_id)
+    async def _get_status_record(self, conversation_id: str) -> SupportChatStatus | None:
+        stmt = select(SupportChatStatus).where(SupportChatStatus.conversation_id == conversation_id)
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 
-    def _merge_messages(
-        self,
-        existing: List[dict] | None,
-        incoming: List[SupportConversationMessage],
-        limit: int = 20,
-    ) -> List[dict]:
-        history = list(existing or [])
-        if incoming:
-            for message in incoming:
-                data = (
-                    message.model_dump(exclude_none=True)
-                    if hasattr(message, "model_dump")
-                    else message.dict(exclude_none=True)
-                )
-                history.append(data)
-        return history[-limit:]
+    async def _get_status_map(self, conversation_ids: List[str]) -> Dict[str, SupportChatStatus]:
+        if not conversation_ids:
+            return {}
+
+        stmt = select(SupportChatStatus).where(SupportChatStatus.conversation_id.in_(conversation_ids))
+        result = await self.db.execute(stmt)
+        rows = result.scalars().all()
+        return {row.conversation_id: row for row in rows}
+
+    def _extract_peer_user_id(self, conversation_id: Optional[str], msg_info: Optional[Dict[str, Any]]) -> Optional[str]:
+        admin_id = settings.OPENIM_ADMIN_USER_ID
+
+        if conversation_id:
+            parts = [p for p in conversation_id.split("_") if p]
+            for part in parts:
+                if part.lower() in {"si", "single", "sg"}:
+                    continue
+                if part != admin_id:
+                    return part
+
+        if msg_info:
+            for key in ("sendID", "recvID", "userID"):
+                value = msg_info.get(key)
+                if value and value != admin_id:
+                    return value
+
+        return None
+
+    def _extract_latest_message(self, msg_info: Dict[str, Any]) -> tuple[Optional[str], Optional[datetime]]:
+        if not msg_info:
+            return None, None
+
+        content_raw = msg_info.get("content")
+        text_content: Optional[str] = None
+        if isinstance(content_raw, str):
+            try:
+                parsed = json.loads(content_raw)
+                text_content = parsed.get("content") or parsed.get("text")
+            except json.JSONDecodeError:
+                text_content = content_raw
+        elif isinstance(content_raw, dict):
+            text_content = content_raw.get("content") or content_raw.get("text")
+
+        ts_ms = (
+            msg_info.get("LatestMsgRecvTime")
+            or msg_info.get("sendTime")
+            or msg_info.get("createTime")
+        )
+        timestamp = datetime.fromtimestamp(ts_ms / 1000) if ts_ms else None
+
+        return text_content, timestamp
 
     async def _build_user_profile(self, user_id: str) -> SupportConversationUserProfile:
         profiles = await self._build_bulk_profiles({user_id})

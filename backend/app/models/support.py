@@ -35,6 +35,23 @@ class SupportConversation(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class SupportChatStatus(Base):
+    """仅记录OpenIM会话的处理状态，不存聊天内容。"""
+
+    __tablename__ = "support_chat_statuses"
+
+    conversation_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    peer_user_id: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", index=True)
+    remark: Mapped[Optional[str]] = mapped_column(Text)
+
+    updated_by: Mapped[Optional[str]] = mapped_column(String(64))
+    updated_by_name: Mapped[Optional[str]] = mapped_column(String(128))
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class SupportQuickMessage(Base):
     """Support快捷回复模板."""
 
@@ -52,6 +69,22 @@ class SupportQuickMessage(Base):
     created_by_name: Mapped[Optional[str]] = mapped_column(String(128))
     updated_by: Mapped[Optional[str]] = mapped_column(String(64))
     updated_by_name: Mapped[Optional[str]] = mapped_column(String(128))
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class SupportCase(Base):
+    """客服工单/Case."""
+
+    __tablename__ = "support_cases"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    support_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    comment: Mapped[Optional[str]] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="open", index=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
