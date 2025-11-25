@@ -1,4 +1,4 @@
-"""Support API routes for会话状态管理."""
+"""Support API routes for conversation state management."""
 from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Path, Query, UploadFile
@@ -32,18 +32,18 @@ from app.services.support_service import SupportService, SupportQuickMessageServ
 router = APIRouter()
 
 
-# ----------------------------- 新版聊天列表 & 状态 ----------------------------- #
+# ----------------------------- Chat list & status ----------------------------- #
 
 
 @router.get(
     "/chats",
     response_model=Response[SupportConversationListResponse],
-    summary="获取聊天列表（OpenIM拉取+本地状态合并）",
+    summary="List chats (OpenIM + local status)",
     include_in_schema=False,
 )
 async def list_chat_sessions(
-    status: Literal["pending", "processed"] | None = Query(None, description="状态过滤"),
-    uid: str | None = Query(None, description="用户ID模糊"),
+    status: Literal["pending", "processed"] | None = Query(None, description="Filter by status"),
+    uid: str | None = Query(None, description="Fuzzy user id"),
     username: str | None = Query(None),
     display_name: str | None = Query(None),
     wallet_address: str | None = Query(None),
@@ -51,7 +51,7 @@ async def list_chat_sessions(
     page_size: int = Query(10, ge=1, le=100),
     db=Depends(get_db),
 ):
-    """新版：直接从OpenIM获取会话列表，合并本地状态，仅返回列表和状态，不含消息内容。"""
+    """Fetch OpenIM conversation list, merge local status, return list + status only."""
     query = SupportConversationQuery(
         status=status,
         uid=uid,
@@ -69,7 +69,7 @@ async def list_chat_sessions(
 @router.patch(
     "/chats/{conversation_id}/status",
     response_model=Response[dict],
-    summary="更新聊天状态（pending/processed）",
+    summary="Update chat status (pending/processed)",
     include_in_schema=False,
 )
 async def patch_chat_status(
@@ -78,7 +78,7 @@ async def patch_chat_status(
     operator_ctx=Depends(get_operator_context),
     db=Depends(get_db),
 ):
-    """新版：仅更新本地状态表，不写入消息。"""
+    """Update local chat status only; no message persistence."""
     service = SupportService(db)
     await service.update_status(
         conversation_id,
@@ -183,7 +183,7 @@ async def create_or_update_conversation(
 )
 async def list_conversations(
     status: Literal["pending", "processed"] | None = Query(None, description="pending/processed"),
-    uid: str | None = Query(None, description="支持模糊匹配"),
+    uid: str | None = Query(None, description="Fuzzy user id"),
     username: str | None = Query(None),
     display_name: str | None = Query(None),
     wallet_address: str | None = Query(None),
@@ -191,7 +191,7 @@ async def list_conversations(
     page_size: int = Query(10, ge=1, le=100),
     db=Depends(get_db),
 ):
-    """分页获取会话列表。"""
+    """List conversations with pagination."""
     query = SupportConversationQuery(
         status=status,
         uid=uid,
@@ -212,10 +212,10 @@ async def list_conversations(
     include_in_schema=False,
 )
 async def get_conversation_detail(
-    conversation_id: str = Path(..., description="会话ID"),
+    conversation_id: str = Path(..., description="Conversation ID"),
     db=Depends(get_db),
 ):
-    """获取会话详情及用户资料。"""
+    """Get conversation detail and user profile."""
     service = SupportService(db)
     detail = await service.get_conversation_detail(conversation_id)
     return Response(data=detail)
@@ -232,7 +232,7 @@ async def update_conversation_status(
     operator_ctx=Depends(get_operator_context),
     db=Depends(get_db),
 ):
-    """运营点击End/Later时更新会话状态。"""
+    """Update conversation status when operator clicks End/Later."""
     service = SupportService(db)
     await service.update_status(
         conversation_id,
@@ -248,7 +248,7 @@ async def lookup_users_by_im_id(
     payload: SupportImLookupRequest,
     db=Depends(get_db),
 ):
-    """批量将 OpenIM im_id 映射为用户资料。"""
+    """Batch map OpenIM im_id to user profiles."""
     service = SupportService(db)
     data = await service.lookup_users_by_im_ids(payload.im_ids)
     return Response(data=data)
@@ -256,7 +256,7 @@ async def lookup_users_by_im_id(
 
 @router.get("/supporters", response_model=Response[SupporterListResponse])
 async def get_supporter_list():
-    """获取客服超级管理员列表（来源于环境配置）。"""
+    """Get supporter admin list from config."""
     supporters = settings.SUPPORT_SUPER_ADMINS or []
     return Response(
         data=SupporterListResponse(supporters=supporters),
@@ -264,7 +264,7 @@ async def get_supporter_list():
     )
 
 
-# ----------------------------- 快捷消息配置 ----------------------------- #
+# ----------------------------- Quick messages ----------------------------- #
 
 
 @router.get(
@@ -272,7 +272,7 @@ async def get_supporter_list():
     response_model=Response[SupportQuickMessageListResponse],
 )
 async def list_quick_messages(
-    active_only: bool = Query(False, description="仅返回启用的快捷消息"),
+    active_only: bool = Query(False, description="Return enabled quick messages only"),
     db=Depends(get_db),
 ):
     service = SupportQuickMessageService(db)
@@ -328,7 +328,7 @@ async def delete_quick_message(
     response_model=Response[SupportQuickMessageUploadResponse],
 )
 async def upload_quick_message_image(
-    file: UploadFile = File(..., description="图片文件"),
+    file: UploadFile = File(..., description="Image file"),
     operator_ctx=Depends(get_operator_context),
     db=Depends(get_db),
 ):
