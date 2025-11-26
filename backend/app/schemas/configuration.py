@@ -21,7 +21,7 @@ class StartupModeListResponse(BaseModel):
 class StartupModeUpdateItem(BaseModel):
     os: str = Field(..., description="Target OS, e.g. ios/android")
     build: str = Field(..., description="Build version string")
-    mode: str = Field(default="normal", description="Startup mode, e.g. normal/strict")
+    mode: str = Field(default="strict", description="Startup mode, e.g. strict/normal")
 
 
 class StartupModeUpdateRequest(BaseModel):
