@@ -1,7 +1,6 @@
-"""Operations API routes - Meme review from Kafka."""
-from datetime import datetime
+"""Operations API routes - Meme review from database (posts/pair)."""
 from typing import List, Optional
-from fastapi import APIRouter, Depends, Query, Path, BackgroundTasks, HTTPException
+from fastapi import APIRouter, Depends, Query, Path, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.schemas.meme import (
@@ -18,9 +17,7 @@ from app.schemas.post_weight import (
     PostWeightResponse,
 )
 from app.services.meme_service import MemeService
-from app.services.kafka_service import kafka_service
 from app.services.post_weight_service import PostWeightService
-from app.config import settings
 from app.auth import get_operator_context
 import logging
 
@@ -28,7 +25,7 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-# Meme Review Routes (from Kafka)
+# Meme Review Routes (from DB)
 @router.get("/memes/review", response_model=Response[MemeReviewListResponse])
 async def get_memes_for_review(
     user_id: Optional[str] = Query(None, description="Filter by creator user ID"),
@@ -39,9 +36,7 @@ async def get_memes_for_review(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Get pending memes from Kafka queue for review.
-
-    The memes are consumed from Kafka topic: memecoin.meme_creation
+    Get pending memes from DB (pair.status=0) for review.
     """
     params = MemeSearchParams(
         user_id=user_id,
@@ -62,7 +57,7 @@ async def get_meme_detail(
     order_id: str = Path(..., description="Meme order ID"),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get meme detail by order_id."""
+    """Get meme detail by order_id (pair.id)."""
     meme_service = MemeService(db)
     meme = await meme_service.get_meme_detail(order_id)
 
@@ -78,12 +73,7 @@ async def review_meme(
     # operator_id: str = Depends(get_current_user),  # TODO: Add auth
 ):
     """
-    Review meme (approve or reject).
-
-    - **approve**: Send to approved topic (memecoin.meme_approved)
-    - **reject**: Discard the message
-
-    The message will be removed from the review queue after processing.
+    Review meme (approve or reject) based on DB records.
     """
     meme_service = MemeService(db)
     await meme_service.review_meme(order_id, review_data, operator_ctx.operator_id)
@@ -92,25 +82,11 @@ async def review_meme(
 
 
 @router.post("/memes/sync", response_model=Response[dict])
-async def sync_memes_from_kafka(
-    background_tasks: BackgroundTasks,
-    batch_size: int = Query(100, ge=1, le=1000, description="Number of messages to fetch")
-):
+async def sync_memes_from_kafka():
     """
-    Manually trigger sync from Kafka to refresh the review queue.
-
-    This endpoint fetches new messages from Kafka and adds them to the in-memory review queue.
-    In production, this should be done automatically by a background task.
+    Deprecated: Kafka同步已下线，改为直接读取数据库。
     """
-    try:
-        # Run sync in background
-        background_tasks.add_task(kafka_service.consume_messages, batch_size)
-
-        return Response(message=f"Kafka sync triggered for up to {batch_size} messages")
-
-    except Exception as e:
-        logger.error(f"Failed to trigger Kafka sync: {e}")
-        return Response(code=500, message=f"Failed to sync: {str(e)}")
+    raise HTTPException(status_code=410, detail="Kafka sync is disabled; review now reads from database")
 
 
 @router.post("/memes/mock-load", response_model=Response[dict], include_in_schema=False)
@@ -118,34 +94,9 @@ async def load_mock_memes(
     mock_request: MemeMockLoadRequest,
 ):
     """
-    Load mock meme messages into in-memory queue (debug only).
-
-    This endpoint allows injecting testing data when Kafka is unavailable.
+    Deprecated: Kafka mock 已下线，使用真实DB数据。
     """
-    if not settings.DEBUG:
-        raise HTTPException(status_code=403, detail="Mock load is disabled when DEBUG=False")
-
-    loaded = 0
-    timestamp_base = int(datetime.utcnow().timestamp() * 1000)
-
-    for idx, meme in enumerate(mock_request.memes):
-        meme_data = meme.model_dump()
-
-        # Skip duplicates by order_id
-        if kafka_service.get_meme_by_order_id(meme_data["order_id"]):
-            continue
-
-        meme_data["_kafka_offset"] = -1
-        meme_data["_kafka_partition"] = 0
-        meme_data["_kafka_timestamp"] = timestamp_base + idx
-
-        kafka_service.pending_messages.append(meme_data)
-        loaded += 1
-
-    return Response(
-        message=f"Mock memes loaded: {loaded}",
-        data={"loaded": loaded, "requested": len(mock_request.memes)}
-    )
+    raise HTTPException(status_code=410, detail="Mock load is disabled; review now reads from database")
 
 
 # Post weight management

@@ -1,10 +1,22 @@
 """Post and Pair (Meme) models - matching existing database schema."""
 from datetime import datetime
+from enum import StrEnum
 from typing import Optional, List
 from sqlalchemy import String, Integer, DateTime, ARRAY, Text, Numeric, SmallInteger, DECIMAL, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy import ForeignKey
 from app.database import Base
+
+
+class PostStatus(StrEnum):
+    """帖子状态枚举，与数据库存储值一致。"""
+    POSTED = "posted"
+    DRAFTED = "drafted"
+    SCHEDULED = "scheduled"
+    PLANNED = "planned"
+    DELETED = "deleted"
+    SUSPENDED = "suspended"
+    REVIEW = "review"
 
 
 class Post(Base):

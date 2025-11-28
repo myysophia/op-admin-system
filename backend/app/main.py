@@ -1,7 +1,5 @@
 """FastAPI main application."""
 from contextlib import asynccontextmanager
-from typing import Any, Dict
-import asyncio
 import json
 import logging
 
@@ -14,7 +12,6 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from app.api.v1 import configuration, operations, support, users
 from app.config import settings
 from app.database import close_db, init_db
-from app.services.kafka_service import kafka_service
 
 # Configure logging
 logging.basicConfig(
@@ -22,17 +19,6 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
-
-
-async def consume_kafka_messages():
-    """Background task to continuously consume Kafka messages."""
-    while True:
-        try:
-            await kafka_service.consume_messages(batch_size=50)
-            await asyncio.sleep(5)  # Poll every 5 seconds
-        except Exception as e:
-            logger.error(f"Error in Kafka consumer loop: {e}")
-            await asyncio.sleep(10)  # Wait before retry
 
 
 @asynccontextmanager
@@ -43,37 +29,10 @@ async def lifespan(app: FastAPI):
     await init_db()
     logger.info("Database initialized")
 
-    # Start Kafka consumer and producer
-    try:
-        await kafka_service.start_consumer()
-        await kafka_service.start_producer()
-        logger.info("Kafka consumer and producer started")
-
-        # Start background task for consuming messages
-        kafka_task = asyncio.create_task(consume_kafka_messages())
-        logger.info("Kafka consumer background task started")
-
-    except Exception as e:
-        logger.error(f"Failed to start Kafka services: {e}")
-
     yield
 
     # Shutdown
     logger.info("Shutting down application...")
-
-    # Stop Kafka background task
-    if 'kafka_task' in locals():
-        kafka_task.cancel()
-        try:
-            await kafka_task
-        except asyncio.CancelledError:
-            pass
-
-    # Stop Kafka services
-    await kafka_service.stop_consumer()
-    await kafka_service.stop_producer()
-    logger.info("Kafka services stopped")
-
     await close_db()
     logger.info("Database connections closed")
 

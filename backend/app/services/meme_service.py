@@ -1,104 +1,100 @@
-"""Meme service - using Kafka for review queue."""
+"""Meme service - now reading pending items from database tables."""
 from datetime import datetime
-from typing import Optional
-from sqlalchemy import select
+from sqlalchemy import func, select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import HTTPException
 from app.models.user import Author
-from app.models.post import Post
+from app.models.post import Post, Pair, Collection, PostStatus
 from app.schemas.meme import (
     MemeSearchParams,
     MemeReviewListResponse,
     MemeReviewListItem,
-    MemeReviewRequest
+    MemeReviewRequest,
 )
-from app.services.kafka_service import kafka_service
 from app.services.notification_service import notification_service
 from app.services.audit_service import AuditService
 import logging
 
 logger = logging.getLogger(__name__)
 
+# Pair.status 语义：0 待审核/隐藏，1 审核通过可展示，其余值视为已处理（例如-1表示拒绝）
+PENDING_PAIR_STATUS = 0
+APPROVED_PAIR_STATUS = 1
+REJECTED_PAIR_STATUS = -1
+
 
 class MemeService:
-    """Meme service for reviewing memes from Kafka."""
+    """Meme审核服务：从posts/pair表获取待审核记录。"""
 
     def __init__(self, db: AsyncSession):
         self.db = db
         self.notification_service = notification_service
         self.audit_service = AuditService(db)
-        self.kafka_service = kafka_service
+
+    async def _get_authors_by_user_ids(self, user_ids: set[str]) -> dict[str, Author]:
+        """批量拉取作者信息，减少重复查询。"""
+        if not user_ids:
+            return {}
+        stmt = select(Author).where(Author.user_id.in_(user_ids))
+        result = await self.db.execute(stmt)
+        return {author.user_id: author for author in result.scalars().all()}
+
+    def _build_filters(self, params: MemeSearchParams):
+        filters = [Pair.status == PENDING_PAIR_STATUS]
+        if params.user_id:
+            filters.append(Pair.creator_id == params.user_id)
+        if params.symbol:
+            filters.append(Pair.base_symbol.ilike(f"%{params.symbol}%"))
+        if params.name:
+            filters.append(Pair.base_name.ilike(f"%{params.name}%"))
+        return filters
 
     async def get_pending_memes(self, params: MemeSearchParams) -> MemeReviewListResponse:
         """
-        Get pending memes from Kafka queue.
-
-        Args:
-            params: Search and pagination parameters
-
-        Returns:
-            MemeReviewListResponse with paginated results
+        获取待审核的meme，数据来源posts/pair。
         """
-        # Calculate offset
         offset = (params.page - 1) * params.page_size
+        filters = self._build_filters(params)
 
-        # Get memes from Kafka service
-        memes, total = self.kafka_service.get_pending_memes(
-            offset=offset,
-            limit=params.page_size,
-            user_id=params.user_id,
-            symbol=params.symbol,
-            name=params.name
+        # 总数统计只依赖pair状态与过滤条件
+        count_stmt = select(func.count()).select_from(Pair).where(*filters)
+        total = await self.db.scalar(count_stmt) or 0
+
+        stmt = (
+            select(Pair, Post, Collection)
+            .join(Post, Pair.collection_id == Post.id, isouter=True)
+            .join(Collection, Collection.id == Post.id, isouter=True)
+            .where(*filters)
+            .order_by(Pair.created_at.desc().nulls_last(), Pair.id.desc())
+            .offset(offset)
+            .limit(params.page_size)
         )
+        result = await self.db.execute(stmt)
+        rows = result.all()
 
-        # Preload holdview_amount from posts table
-        collection_ids = list({m.get('collection_id') for m in memes if m.get('collection_id')})
-        holdview_map: dict[str, int] = {}
-        if collection_ids:
-            stmt = select(Post.id, Post.holdview_amount).where(Post.id.in_(collection_ids))
-            result = await self.db.execute(stmt)
-            holdview_map = {row[0]: row[1] for row in result.all()}
+        creator_ids = {pair.creator_id for pair, _, _ in rows if pair and pair.creator_id}
+        author_map = await self._get_authors_by_user_ids(creator_ids)
 
-        # Enrich with author information if available
         items = []
-        for meme in memes:
-            # Try to get author info from database
-            creator_username = None
-            creator_name = None
-
-            if meme.get('user_id'):
-                author_query = select(Author).where(Author.user_id == meme['user_id'])
-                result = await self.db.execute(author_query)
-                author = result.scalar_one_or_none()
-
-                if author:
-                    creator_username = author.username
-                    creator_name = author.name
-
-            # Build response item
-            collection_id = meme.get('collection_id')
-            holdview_amount = holdview_map.get(collection_id) if collection_id else None
-            if holdview_amount is None and meme.get('holdview_amount') is not None:
-                try:
-                    holdview_amount = int(meme['holdview_amount'])
-                except (TypeError, ValueError):
-                    holdview_amount = None
-
+        for pair, post, collection in rows:
+            creator = author_map.get(pair.creator_id) if pair else None
+            created_at = pair.created_at or pair.base_created_at or (post.created_at if post else None)
+            avatar = pair.base_image_url or (collection.cover if collection else None) or ""
             item = MemeReviewListItem(
-                order_id=meme['order_id'],
-                user_id=meme['user_id'],
-                collection_id=meme['collection_id'],
-                name=meme['name'],
-                symbol=meme['symbol'],
-                avatar=meme['avatar'],
-                about=meme['about'],
-                chain_id=meme['chain_id'],
-                social_links=meme.get('social_links', {}),
-                user_region=meme['user_region'],
-                holdview_amount=holdview_amount,
-                kafka_timestamp=datetime.fromtimestamp(meme['_kafka_timestamp'] / 1000) if meme.get('_kafka_timestamp') else None,
-                creator_username=creator_username,
-                creator_name=creator_name
+                order_id=str(pair.id),
+                user_id=pair.creator_id or "",
+                collection_id=pair.collection_id or (post.id if post else ""),
+                name=pair.base_name or "",
+                symbol=pair.base_symbol or "",
+                avatar=avatar,
+                about=pair.base_description or "",
+                chain_id=pair.chain,
+                social_links=pair.social_links or {},
+                user_region=post.region if post and post.region else "US",
+                holdview_amount=post.holdview_amount if post else None,
+                kafka_timestamp=created_at,
+                creator_username=creator.username if creator else None,
+                creator_name=creator.name if creator else None,
             )
             items.append(item)
 
@@ -106,125 +102,156 @@ class MemeService:
             items=items,
             total=total,
             page=params.page,
-            page_size=params.page_size
+            page_size=params.page_size,
         )
 
     async def get_meme_detail(self, order_id: str) -> dict:
         """
-        Get meme detail by order_id.
-
-        Args:
-            order_id: The unique order ID of the meme
-
-        Returns:
-            Meme data dictionary
-
-        Raises:
-            HTTPException: If meme not found
+        根据pair.id（兼容旧order_id概念）读取详情。
         """
-        meme = self.kafka_service.get_meme_by_order_id(order_id)
-
-        if not meme:
+        try:
+            pair_id = int(order_id)
+        except (TypeError, ValueError):
             raise HTTPException(status_code=404, detail="Meme not found in review queue")
 
-        # Enrich with author info
-        if meme.get('user_id'):
-            author_query = select(Author).where(Author.user_id == meme['user_id'])
-            result = await self.db.execute(author_query)
-            author = result.scalar_one_or_none()
+        stmt = (
+            select(Pair, Post, Collection)
+            .join(Post, Pair.collection_id == Post.id, isouter=True)
+            .join(Collection, Collection.id == Post.id, isouter=True)
+            .where(Pair.id == pair_id)
+        )
+        result = await self.db.execute(stmt)
+        row = result.first()
 
-            if author:
-                meme['creator_username'] = author.username
-                meme['creator_name'] = author.name
-                meme['creator_avatar'] = author.avatar
+        if not row:
+            raise HTTPException(status_code=404, detail="Meme not found in review queue")
 
-        return meme
+        pair, post, collection = row
+        author_map = await self._get_authors_by_user_ids({pair.creator_id} if pair.creator_id else set())
+        creator = author_map.get(pair.creator_id) if pair else None
+
+        created_at = pair.created_at or pair.base_created_at or (post.created_at if post else None)
+        avatar = pair.base_image_url or (collection.cover if collection else None) or ""
+
+        return {
+            "order_id": str(pair.id),
+            "user_id": pair.creator_id,
+            "collection_id": pair.collection_id or (post.id if post else None),
+            "name": pair.base_name,
+            "symbol": pair.base_symbol,
+            "avatar": avatar,
+            "about": pair.base_description,
+            "chain_id": pair.chain,
+            "social_links": pair.social_links or {},
+            "user_region": post.region if post and post.region else "US",
+            "holdview_amount": post.holdview_amount if post else None,
+            "created_at": created_at,
+            "pair_status": pair.status,
+            "post_status": post.status if post else None,
+            "collection_cover": collection.cover if collection else None,
+            "collection_description": collection.description if collection else None,
+            "creator_username": creator.username if creator else None,
+            "creator_name": creator.name if creator else None,
+        }
 
     async def review_meme(
         self,
         order_id: str,
         review_data: MemeReviewRequest,
-        operator_id: str
+        operator_id: str,
     ) -> None:
         """
-        Review meme (approve or reject).
-
-        - Approve: Send message to approved topic and remove from queue
-        - Reject: Simply remove from queue (discard)
-
-        Args:
-            order_id: The unique order ID of the meme
-            review_data: Review action and optional comment
-            operator_id: ID of the operator performing the review
-
-        Raises:
-            HTTPException: If meme not found or Kafka error
+        审核meme：基于pair状态更新，移除待审核列表并通知创作者。
         """
-        # Get meme from queue
-        meme = self.kafka_service.get_meme_by_order_id(order_id)
-
-        if not meme:
+        try:
+            pair_id = int(order_id)
+        except (TypeError, ValueError):
             raise HTTPException(status_code=404, detail="Meme not found in review queue")
 
+        stmt = (
+            select(Pair, Post)
+            .join(Post, Pair.collection_id == Post.id, isouter=True)
+            .where(Pair.id == pair_id)
+        )
+        result = await self.db.execute(stmt)
+        row = result.first()
+
+        if not row:
+            raise HTTPException(status_code=404, detail="Meme not found in review queue")
+
+        pair, post = row
+        if pair.status != PENDING_PAIR_STATUS:
+            raise HTTPException(status_code=400, detail="Meme already reviewed or unavailable")
+
+        # 预先缓存通知与审计所需字段，避免删除后取值失败
+        meme_meta = {
+            "pair_id": pair.id,
+            "creator_id": pair.creator_id,
+            "collection_id": pair.collection_id,
+            "base_name": pair.base_name,
+            "base_symbol": pair.base_symbol,
+        }
+
         try:
+            now = datetime.utcnow()
             if review_data.action == "approve":
-                # Send to approved topic
-                await self.kafka_service.produce_approved_meme(meme)
-
-                # Notify creator via external notification API
-                if meme.get('user_id'):
-                    try:
-                        await self.notification_service.send_meme_approved_notification(
-                            user_id=meme['user_id'],
-                            meme_name=meme['name'],
-                            meme_symbol=meme['symbol'],
-                            order_id=order_id,
-                            comment=review_data.comment
-                        )
-                    except Exception as e:
-                        logger.warning(f"Failed to send approval notification: {e}")
-
-                logger.info(f"Meme approved and sent to approved topic: order_id={order_id}")
-
+                pair.status = APPROVED_PAIR_STATUS
+                if post:
+                    post.status = PostStatus.POSTED.value
+                    post.updated_at = now
             else:
-                # Reject: just discard
-                logger.info(f"Meme rejected and discarded: order_id={order_id}")
+                pair.status = REJECTED_PAIR_STATUS
+                if post:
+                    post.status = PostStatus.DELETED.value
+                    post.updated_at = now
+                if pair.collection_id:
+                    await self.db.execute(delete(Pair).where(Pair.collection_id == pair.collection_id))
+                    await self.db.execute(delete(Collection).where(Collection.id == pair.collection_id))
 
-                # Notify creator of rejection via external notification API
-                if meme.get('user_id'):
-                    try:
-                        await self.notification_service.send_meme_rejected_notification(
-                            user_id=meme['user_id'],
-                            meme_name=meme['name'],
-                            meme_symbol=meme['symbol'],
-                            order_id=order_id,
-                            reason=review_data.comment
-                        )
-                    except Exception as e:
-                        logger.warning(f"Failed to send rejection notification: {e}")
+            await self.db.commit()
 
-            # Remove from pending queue
-            removed = self.kafka_service.remove_meme_by_order_id(order_id)
-
-            if not removed:
-                logger.warning(f"Meme not found in queue during removal: order_id={order_id}")
-
-            # Audit log
-            await self.audit_service.log_action(
-                operator_id=operator_id,
-                action_type=f"{review_data.action}_meme",
-                target_type="meme",
-                target_id=order_id,
-                action_details={
-                    "action": review_data.action,
-                    "comment": review_data.comment,
-                    "meme_name": meme.get('name'),
-                    "meme_symbol": meme.get('symbol'),
-                    "user_id": meme.get('user_id'),
-                    "collection_id": meme.get('collection_id')
-                }
-            )
-
+        except HTTPException:
+            await self.db.rollback()
+            raise
         except Exception as e:
+            await self.db.rollback()
             logger.error(f"Error during meme review: {e}")
             raise HTTPException(status_code=500, detail=f"Failed to process review: {str(e)}")
+
+        # 审核结果通知（失败不影响主流程）
+        if meme_meta["creator_id"]:
+            try:
+                if review_data.action == "approve":
+                    await self.notification_service.send_meme_approved_notification(
+                        user_id=meme_meta["creator_id"],
+                        meme_name=meme_meta["base_name"],
+                        meme_symbol=meme_meta["base_symbol"],
+                        order_id=str(meme_meta["pair_id"]),
+                        comment=review_data.comment,
+                    )
+                else:
+                    await self.notification_service.send_meme_rejected_notification(
+                        user_id=meme_meta["creator_id"],
+                        meme_name=meme_meta["base_name"],
+                        meme_symbol=meme_meta["base_symbol"],
+                        order_id=str(meme_meta["pair_id"]),
+                        reason=review_data.comment,
+                    )
+            except Exception as e:
+                logger.warning(f"Failed to send meme review notification: {e}")
+
+        # 审计记录
+        await self.audit_service.log_action(
+            operator_id=operator_id,
+            action_type=f"{review_data.action}_meme",
+            target_type="meme",
+            target_id=str(meme_meta["pair_id"]),
+            action_details={
+                "action": review_data.action,
+                "comment": review_data.comment,
+                "meme_name": meme_meta["base_name"],
+                "meme_symbol": meme_meta["base_symbol"],
+                "user_id": meme_meta["creator_id"],
+                "collection_id": meme_meta["collection_id"],
+            },
+        )

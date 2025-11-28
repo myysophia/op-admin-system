@@ -1,4 +1,4 @@
-"""Meme (from Kafka) schemas."""
+"""Meme审核相关schema（保留旧字段名以兼容前端，数据源已改为DB）。"""
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
@@ -49,7 +49,7 @@ class MemeCreationMessage(BaseModel):
 
 
 class MemeReviewListItem(BaseModel):
-    """Meme item in review list."""
+    """待审核Meme列表项，kafka_timestamp现表示创建时间（来自DB）。"""
     order_id: str
     user_id: str
     collection_id: str
@@ -96,7 +96,7 @@ class MemeReviewRequest(BaseModel):
 
 
 class MemeSearchParams(BaseModel):
-    """Search parameters for Meme review from Kafka."""
+    """Search parameters for Meme review from DB."""
     user_id: Optional[str] = None
     symbol: Optional[str] = None
     name: Optional[str] = None
