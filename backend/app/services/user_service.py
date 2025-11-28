@@ -427,14 +427,48 @@ class UserService:
         result = await self.db.execute(active_ban_query)
         active_bans = result.scalars().all()
 
+        resolved_operator_id = self._resolve_operator_id(operator_id)
+        resolved_operator_name = await self._resolve_operator_name(resolved_operator_id, operator_name)
+
+        unban_reason = unban_data.reason if unban_data and unban_data.reason else "Unbanned by operator"
+
         if not active_bans:
+            # Idempotent unban: if user status is banned but no active ban rows, still allow unban to proceed
+            if user.status == "banned":
+                user.status = "active"
+                user.updated_at = datetime.utcnow()
+
+                history_entry = BanHistory(
+                    user_id=user_id,
+                    action="unban",
+                    reason=unban_reason,
+                    duration_seconds=None,
+                    operator_id=resolved_operator_id,
+                    ban_method=None,
+                    operator_name=resolved_operator_name,
+                    created_at=datetime.utcnow(),
+                )
+                self.db.add(history_entry)
+
+                await self._call_external_unban_api(user_id, unban_reason, authorization_header)
+                await self.db.commit()
+
+                await self.audit_service.log_action(
+                    operator_id=resolved_operator_id,
+                    action_type="unban_user",
+                    target_type="user",
+                    target_id=user_id,
+                    action_details={
+                        "reason": unban_reason,
+                        "bans_revoked": 0,
+                        "operator_name": resolved_operator_name,
+                    }
+                )
+                return
+
             raise HTTPException(status_code=400, detail="User has no active bans")
 
-        resolved_operator_id = self._resolve_operator_id(operator_id)
-        resolved_operator_name = await self._resolve_operator_name(resolved_operator_id)
-
         # Revoke all active bans
-        unban_reason = unban_data.reason if unban_data and unban_data.reason else "Unbanned by operator"
         for ban in active_bans:
             ban.revoked_at = datetime.utcnow()
             ban.revoked_by = resolved_operator_id
