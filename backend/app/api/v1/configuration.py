@@ -64,6 +64,17 @@ async def get_app_versions(
     return Response(data=data)
 
 
+@router.get(
+    "/upgrade/app-versions/latest",
+    response_model=Response[AppVersionConfigResponse],
+    summary="Get latest optional/mandatory app versions for iOS and Android",
+)
+async def get_app_versions_latest(db=Depends(get_db)):
+    service = ConfigurationService(db)
+    data = await service.get_app_version_config()
+    return Response(data=data)
+
+
 @router.put("/upgrade/app-versions", response_model=Response[AppVersionConfigResponse])
 async def update_app_versions(
     payload: AppVersionConfigUpdateRequest,

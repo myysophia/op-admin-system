@@ -51,7 +51,7 @@ class ConfigurationService:
         if os_filter:
             stmt = stmt.where(StartupMode.os == os_filter)
 
-        stmt = stmt.order_by(StartupMode.os.asc(), StartupMode.build.desc())
+        stmt = stmt.order_by(StartupMode.os.asc(), StartupMode.build.desc(), StartupMode.mode.asc())
         stmt = stmt.limit(limit).offset(offset)
 
         result = await self.db.execute(stmt)
@@ -73,13 +73,13 @@ class ConfigurationService:
             stmt = select(StartupMode).where(
                 StartupMode.os == item.os,
                 StartupMode.build == item.build,
+                StartupMode.mode == item.mode,
             )
             existing = await self.db.scalar(stmt)
             if existing:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Startup mode for os={item.os}, build={item.build} already exists",
-                )
+                # 替换式新增：先删除旧记录，再插入新记录
+                await self.db.delete(existing)
+                await self.db.flush()
 
         for item in payload.items:
             record = StartupMode(os=item.os, build=item.build, mode=item.mode)

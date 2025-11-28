@@ -16,7 +16,7 @@ class StartupMode(Base):
 
     os: Mapped[str] = mapped_column(String, primary_key=True)
     build: Mapped[str] = mapped_column(String, primary_key=True)
-    mode: Mapped[str] = mapped_column(String, nullable=False)
+    mode: Mapped[str] = mapped_column(String, primary_key=True)
 
 
 class AppVersion(Base):
