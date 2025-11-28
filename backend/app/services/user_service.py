@@ -428,7 +428,7 @@ class UserService:
         active_bans = result.scalars().all()
 
         resolved_operator_id = self._resolve_operator_id(operator_id)
-        resolved_operator_name = await self._resolve_operator_name(resolved_operator_id, operator_name)
+        resolved_operator_name = await self._resolve_operator_name(resolved_operator_id)
 
         unban_reason = unban_data.reason if unban_data and unban_data.reason else "Unbanned by operator"
 
