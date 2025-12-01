@@ -7,7 +7,7 @@ import logging
 
 import httpx
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func, select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -123,22 +123,30 @@ class ConfigurationService:
             "android": PlatformVersionInfo(),
         }
 
+        optional_prompt: Optional[str] = None
+        mandatory_prompt: Optional[str] = None
+
         for version_obj, rank in result.all():
             if rank != 1:
                 continue
-            info = AppVersionInfo(
-                version=version_obj.version,
-                prompt=version_obj.release_notes,
-            )
+            info = AppVersionInfo(version=version_obj.version)
             slot = "mandatory" if version_obj.force_update else "optional"
             platform_key = version_obj.target_os.lower()
             if platform_key not in platforms:
                 platforms[platform_key] = PlatformVersionInfo()
             setattr(platforms[platform_key], slot, info)
 
+            # 提示文案与版本绑定：取最新记录中的 release_notes 作为全局 optional/mandatory prompt
+            if slot == "optional" and optional_prompt is None:
+                optional_prompt = version_obj.release_notes
+            if slot == "mandatory" and mandatory_prompt is None:
+                mandatory_prompt = version_obj.release_notes
+
         return AppVersionConfigResponse(
             ios=platforms.get("ios", PlatformVersionInfo()),
             android=platforms.get("android", PlatformVersionInfo()),
+            optional_prompt=optional_prompt,
+            mandatory_prompt=mandatory_prompt,
         )
 
     # ------------------------------------------------------------------ #
@@ -149,10 +157,13 @@ class ConfigurationService:
         operator_name: str,
     ) -> AppVersionConfigResponse:
         entries = self._extract_entries(payload)
-        if not entries:
-            raise HTTPException(status_code=400, detail="未提供任何需要更新的版本信息")
+
+        # 需求：仅保留最后一次保存的结果；若为空则清空所有版本配置。
+        await self.db.execute(delete(AppVersion))
+        await self.db.flush()
 
         saved: List[AppVersion] = []
+
         for entry in entries:
             release_dt = entry.release_date or datetime.utcnow()
             # Normalize timezone-aware datetimes to naive UTC to match TIMESTAMP WITHOUT TIME ZONE
@@ -180,7 +191,6 @@ class ConfigurationService:
 
         await self.db.commit()
 
-        # Refresh to populate defaults
         for version in saved:
             await self.db.refresh(version)
 
@@ -330,6 +340,7 @@ class ConfigurationService:
             "status_code": response.status_code,
             "response": data,
         }
+
 
     # ------------------------------------------------------------------ #
     def _extract_entries(self, payload: AppVersionConfigUpdateRequest) -> List["_VersionEntry"]:

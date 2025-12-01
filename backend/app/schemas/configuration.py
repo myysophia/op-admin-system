@@ -37,7 +37,6 @@ class PublishVersionRequest(BaseModel):
 
 class AppVersionInfo(BaseModel):
     version: str
-    prompt: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -50,6 +49,8 @@ class PlatformVersionInfo(BaseModel):
 class AppVersionConfigResponse(BaseModel):
     ios: PlatformVersionInfo = Field(default_factory=PlatformVersionInfo)
     android: PlatformVersionInfo = Field(default_factory=PlatformVersionInfo)
+    optional_prompt: Optional[str] = None
+    mandatory_prompt: Optional[str] = None
 
 
 class AppVersionUpdatePayload(BaseModel):
