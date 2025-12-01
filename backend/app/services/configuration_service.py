@@ -24,6 +24,7 @@ from app.schemas.configuration import (
     StartupModeItem,
     StartupModeListResponse,
     StartupModeUpdateRequest,
+    StartupModeUpdateItem,
 )
 from app.services.audit_service import AuditService
 
@@ -99,6 +100,69 @@ class ConfigurationService:
         )
 
         return await self.list_startup_modes(mode="normal")
+
+    async def replace_startup_modes_and_push_strict(self, payload: StartupModeUpdateRequest) -> StartupModeListResponse:
+        """覆盖保存 review 页面配置后，同步将所有版本设置为 strict（隐藏 Web3）。"""
+        if not payload.items:
+            # 清空
+            await self.db.execute(delete(StartupMode))
+            await self.db.commit()
+            return await self.list_startup_modes(mode="normal")
+
+        # 覆盖保存
+        await self.db.execute(delete(StartupMode))
+        await self.db.flush()
+
+        for item in payload.items:
+            record = StartupMode(os=item.os, build=item.build, mode=item.mode)
+            self.db.add(record)
+
+        await self.db.commit()
+
+        # 将所有配置推送为 strict（隐藏 Web3）
+        await self._push_modes_to_external(payload.items, mode="strict")
+
+        return await self.list_startup_modes(mode="normal")
+
+    async def _push_modes_to_external(self, items: list[StartupModeUpdateItem], mode: str) -> None:
+        url = settings.EXTERNAL_MODE_API_URL
+        if not url:
+            return
+
+        for item in items:
+            body = {
+                "build": item.build,
+                "os": item.os,
+                "mode": mode,
+            }
+
+            try:
+                async with httpx.AsyncClient(
+                    timeout=10.0,
+                    verify=settings.EXTERNAL_MODE_VERIFY_SSL,
+                ) as client:
+                    response = await client.put(
+                        url,
+                        headers={
+                            "accept": "application/json",
+                            "Content-Type": "application/json",
+                        },
+                        json=body,
+                    )
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.exception("调用外部 Mode API 失败", extra={"url": url, "payload": body})
+                raise HTTPException(status_code=502, detail=f"调用外部 Mode API 失败: {exc}") from exc
+
+            if response.status_code < 200 or response.status_code >= 300:
+                try:
+                    data = response.json()
+                except Exception:
+                    data = {"raw": response.text}
+                logger.error(
+                    "外部 Mode API 返回异常",
+                    extra={"status_code": response.status_code, "response": data, "payload": body},
+                )
+                raise HTTPException(status_code=502, detail=f"外部 Mode API 返回异常状态: {response.status_code}")
 
     # ------------------------------------------------------------------ #
     async def get_app_version_config(

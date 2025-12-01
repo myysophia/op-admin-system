@@ -42,8 +42,8 @@ async def create_startup_mode(
 ):
     """Create new startup mode entries for Web3 display."""
     service = ConfigurationService(db)
-    data = await service.add_startup_modes(payload, operator_ctx.operator_id, operator_ctx.operator_name)
-    return Response(message="Startup mode created", data=data)
+    data = await service.replace_startup_modes_and_push_strict(payload)
+    return Response(message="Startup modes saved & pushed strict", data=data)
 
 
 @router.get(
