@@ -150,7 +150,14 @@ class ConfigurationService:
                         json=body,
                     )
             except Exception as exc:  # pylint: disable=broad-except
-                logger.exception("调用外部 Mode API 失败", extra={"url": url, "payload": body})
+                logger.exception(
+                    "调用外部 Mode API 失败",
+                    extra={
+                        "url": url,
+                        "payload": body,
+                        "mode": mode,
+                    },
+                )
                 raise HTTPException(status_code=502, detail=f"调用外部 Mode API 失败: {exc}") from exc
 
             if response.status_code < 200 or response.status_code >= 300:
@@ -160,7 +167,13 @@ class ConfigurationService:
                     data = {"raw": response.text}
                 logger.error(
                     "外部 Mode API 返回异常",
-                    extra={"status_code": response.status_code, "response": data, "payload": body},
+                    extra={
+                        "status_code": response.status_code,
+                        "response": data,
+                        "payload": body,
+                        "mode": mode,
+                        "url": url,
+                    },
                 )
                 raise HTTPException(status_code=502, detail=f"外部 Mode API 返回异常状态: {response.status_code}")
 
