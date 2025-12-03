@@ -25,7 +25,7 @@ class StartupModeUpdateItem(BaseModel):
 
 
 class StartupModeUpdateRequest(BaseModel):
-    items: list[StartupModeUpdateItem] = Field(..., min_items=1, description="Startup mode entries to add")
+    items: list[StartupModeUpdateItem] = Field(default_factory=list, description="Startup mode entries to add")
 
 
 class PublishVersionRequest(BaseModel):

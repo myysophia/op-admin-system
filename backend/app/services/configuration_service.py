@@ -103,33 +103,36 @@ class ConfigurationService:
 
     async def replace_startup_modes_and_push_strict(self, payload: StartupModeUpdateRequest) -> StartupModeListResponse:
         """覆盖保存 review 页面配置后，同步将所有版本设置为 strict（隐藏 Web3）。"""
-        # 记录更新前的版本集合，用于推送 normal（恢复 Web3）
-        existing_stmt = select(StartupMode)
-        existing_rows = (await self.db.execute(existing_stmt)).scalars().all()
-        existing_set = {(row.os, row.build) for row in existing_rows}
+        # 查询当前存量，做增量更新，避免删除记录
+        existing_rows = (await self.db.execute(select(StartupMode))).scalars().all()
+        existing_map = {(row.os, row.build): row for row in existing_rows}
+
         new_set = {(item.os, item.build) for item in (payload.items or [])}
+        existing_set = set(existing_map.keys())
         removed_set = existing_set - new_set
 
-        # 覆盖保存
-        await self.db.execute(delete(StartupMode))
-        await self.db.flush()
-
+        # 提交的版本：设为 strict（新增则插入，已存在则更新）
         for item in payload.items:
-            # 新增/覆盖时一律存 strict
-            record = StartupMode(os=item.os, build=item.build, mode="strict")
-            self.db.add(record)
+            key = (item.os, item.build)
+            row = existing_map.get(key)
+            if row:
+                row.mode = "strict"
+            else:
+                self.db.add(StartupMode(os=item.os, build=item.build, mode="strict"))
+
+        # 删除的版本：保留记录但改为 normal
+        for os_val, build_val in removed_set:
+            row = existing_map.get((os_val, build_val))
+            if row:
+                row.mode = "normal"
 
         await self.db.commit()
 
-        # 将新增/保留的版本推 strict
+        # 推送外部：提交的版本 -> strict；被删除的版本 -> normal
         if payload.items:
             await self._push_modes_to_external(payload.items, mode="strict")
-        # 将被删除的版本推 normal（恢复 Web3 展示）
         if removed_set:
-            removed_items = [
-                StartupModeUpdateItem(os=os_val, build=build_val, mode="normal")
-                for os_val, build_val in removed_set
-            ]
+            removed_items = [StartupModeUpdateItem(os=os_val, build=build_val, mode="normal") for os_val, build_val in removed_set]
             await self._push_modes_to_external(removed_items, mode="normal")
 
         return await self.list_startup_modes(mode="normal")
