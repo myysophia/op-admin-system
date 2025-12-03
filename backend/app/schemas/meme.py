@@ -98,6 +98,7 @@ class MemeReviewRequest(BaseModel):
 class MemeSearchParams(BaseModel):
     """Search parameters for Meme review from DB."""
     user_id: Optional[str] = None
+    creator_name: Optional[str] = None
     symbol: Optional[str] = None
     name: Optional[str] = None
 

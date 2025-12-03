@@ -47,6 +47,8 @@ class MemeService:
             filters.append(Pair.base_symbol.ilike(f"%{params.symbol}%"))
         if params.name:
             filters.append(Pair.base_name.ilike(f"%{params.name}%"))
+        if params.creator_name:
+            filters.append(Author.name.ilike(f"%{params.creator_name}%"))
         return filters
 
     async def get_pending_memes(self, params: MemeSearchParams) -> MemeReviewListResponse:
@@ -64,6 +66,7 @@ class MemeService:
             select(Pair, Post, Collection)
             .join(Post, Pair.collection_id == Post.id, isouter=True)
             .join(Collection, Collection.id == Post.id, isouter=True)
+            .join(Author, Author.user_id == Pair.creator_id, isouter=True)
             .where(*filters)
             .order_by(Pair.created_at.desc().nulls_last(), Pair.id.desc())
             .offset(offset)

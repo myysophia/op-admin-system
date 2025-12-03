@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 @router.get("/memes/review", response_model=Response[MemeReviewListResponse])
 async def get_memes_for_review(
     user_id: Optional[str] = Query(None, description="Filter by creator user ID"),
+    creator_name: Optional[str] = Query(None, description="Filter by creator display name"),
     symbol: Optional[str] = Query(None, description="Filter by meme symbol"),
     name: Optional[str] = Query(None, description="Filter by meme name"),
     page: int = Query(1, ge=1),
@@ -40,6 +41,7 @@ async def get_memes_for_review(
     """
     params = MemeSearchParams(
         user_id=user_id,
+        creator_name=creator_name,
         symbol=symbol,
         name=name,
         page=page,
