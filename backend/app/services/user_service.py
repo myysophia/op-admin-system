@@ -561,6 +561,8 @@ class UserService:
                         "status_code": response.status_code,
                         "response": response.text,
                         "payload": payload,
+                        "endpoint": endpoint,
+                        "headers": {k: v for k, v in headers.items() if k.lower() != "authorization"},
                     },
                 )
                 await self.db.rollback()
@@ -574,7 +576,12 @@ class UserService:
         except Exception as exc:
             logger.exception(
                 "调用外部封禁接口失败",
-                extra={"user_id": user_id, "payload": payload},
+                extra={
+                    "user_id": user_id,
+                    "payload": payload,
+                    "endpoint": endpoint,
+                    "headers": {k: v for k, v in headers.items() if k.lower() != "authorization"},
+                },
             )
             await self.db.rollback()
             raise HTTPException(
@@ -620,6 +627,8 @@ class UserService:
                         "status_code": response.status_code,
                         "response": response.text,
                         "payload": payload,
+                        "endpoint": endpoint,
+                        "headers": {k: v for k, v in headers.items() if k.lower() != "authorization"},
                     },
                 )
                 await self.db.rollback()
@@ -633,7 +642,12 @@ class UserService:
         except Exception as exc:
             logger.exception(
                 "调用外部解封接口失败",
-                extra={"user_id": user_id, "payload": payload},
+                extra={
+                    "user_id": user_id,
+                    "payload": payload,
+                    "endpoint": endpoint,
+                    "headers": {k: v for k, v in headers.items() if k.lower() != "authorization"},
+                },
             )
             await self.db.rollback()
             raise HTTPException(
