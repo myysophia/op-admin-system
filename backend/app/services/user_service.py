@@ -4,6 +4,7 @@ from typing import Optional
 import uuid
 import zlib
 import logging
+import jwt
 
 import httpx
 from fastapi import HTTPException
@@ -27,6 +28,7 @@ from app.schemas.user import (
     UserSearchParams,
     UserUpdate,
     WalletResponse,
+    TokenResponse,
 )
 from app.services.audit_service import AuditService
 from app.services.notification_service import notification_service
@@ -67,6 +69,25 @@ class UserService:
         crc32_hash = zlib.crc32(salted_input.encode("utf-8")) & 0xFFFFFFFF
         uid = (crc32_hash % (self.MAX_UID - 1)) + 1
         return uid
+
+    async def _get_superuser_token(self) -> str:
+        """从 accesstoken 表获取最新的超管 token，用于外部接口调用。"""
+        stmt = (
+            select(text('token'))
+            .select_from(text('accesstoken'))
+            .where(text("user_id = 'BgwSdhW0z60'"))
+            .order_by(text('created_at DESC'))
+            .limit(1)
+        )
+        result = await self.db.execute(stmt)
+        token = result.scalar_one_or_none()
+        if not token:
+            logger.error("accesstoken表未找到超管token，无法调用外部接口")
+            await self.db.rollback()
+            raise HTTPException(status_code=500, detail="未找到可用的超管token")
+
+        logger.warning("外部调用使用accesstoken表token=%s", token)
+        return token
 
     async def get_users(self, params: UserSearchParams) -> UserListResponse:
         """Get user list with search and pagination - joining users, authors, and wallets."""
@@ -361,13 +382,9 @@ class UserService:
         )
         self.db.add(history_entry)
 
-        # Update user status to 'banned'
-        user.status = "banned"
-        user.updated_at = datetime.utcnow()
-
         await self.db.flush()
 
-        await self._call_external_ban_api(user_id, ban_data, authorization_header)
+        await self._call_external_ban_api(user_id, ban_data)
 
         await self.db.commit()
 
@@ -486,13 +503,9 @@ class UserService:
         )
         self.db.add(history_entry)
 
-        # Update user status to 'active'
-        user.status = "active"
-        user.updated_at = datetime.utcnow()
-
         await self.db.flush()
 
-        await self._call_external_unban_api(user_id, unban_reason, authorization_header)
+        await self._call_external_unban_api(user_id, unban_reason)
 
         await self.db.commit()
 
@@ -525,7 +538,6 @@ class UserService:
         self,
         user_id: str,
         ban_data: BanRequest,
-        authorization_header: str,
     ) -> None:
         """调用外部封禁接口，确保与上游系统同步。"""
         api_url = settings.EXTERNAL_USER_API_URL
@@ -533,10 +545,12 @@ class UserService:
             await self.db.rollback()
             raise HTTPException(status_code=500, detail="外部封禁接口未配置")
 
-        endpoint = f"{api_url.rstrip('/')}/users/{user_id}/ban"
+        token = await self._get_superuser_token()
+
+        endpoint = f"{api_url.rstrip('/')}/users/{user_id}/ban?role=write"
         headers = {
             "accept": "application/json",
-            "Authorization": authorization_header,
+            "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         }
         payload = {
@@ -544,26 +558,25 @@ class UserService:
             "duration": ban_data.duration or 0,
         }
 
+        timeout = httpx.Timeout(connect=5.0, read=45.0, write=10.0, pool=5.0)
+
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.post(
                     endpoint,
-                    params={"role": "write"},
                     json=payload,
                     headers=headers,
                 )
 
             if response.status_code != 200:
                 logger.error(
-                    "外部封禁接口调用返回异常",
-                    extra={
-                        "user_id": user_id,
-                        "status_code": response.status_code,
-                        "response": response.text,
-                        "payload": payload,
-                        "endpoint": endpoint,
-                        "headers": {k: v for k, v in headers.items() if k.lower() != "authorization"},
-                    },
+                    "外部封禁接口返回异常 status=%s body=%s endpoint=%s payload=%s headers=%s token=%s",
+                    response.status_code,
+                    response.text[:500],
+                    endpoint,
+                    payload,
+                    {k: v for k, v in headers.items() if k.lower() != "authorization"},
+                    token,
                 )
                 await self.db.rollback()
                 raise HTTPException(
@@ -575,13 +588,11 @@ class UserService:
             raise
         except Exception as exc:
             logger.exception(
-                "调用外部封禁接口失败",
-                extra={
-                    "user_id": user_id,
-                    "payload": payload,
-                    "endpoint": endpoint,
-                    "headers": {k: v for k, v in headers.items() if k.lower() != "authorization"},
-                },
+                "调用外部封禁接口失败 endpoint=%s payload=%s headers=%s token=%s",
+                endpoint,
+                payload,
+                {k: v for k, v in headers.items() if k.lower() != "authorization"},
+                token,
             )
             await self.db.rollback()
             raise HTTPException(
@@ -593,7 +604,6 @@ class UserService:
         self,
         user_id: str,
         reason: Optional[str],
-        authorization_header: str,
     ) -> None:
         """调用外部解封接口，确保状态一致。"""
         api_url = settings.EXTERNAL_USER_API_URL
@@ -601,35 +611,36 @@ class UserService:
             await self.db.rollback()
             raise HTTPException(status_code=500, detail="外部解封接口未配置")
 
-        endpoint = f"{api_url.rstrip('/')}/users/{user_id}/unban"
+        token = await self._get_superuser_token()
+
+        endpoint = f"{api_url.rstrip('/')}/users/{user_id}/unban?role=write"
         headers = {
             "accept": "application/json",
-            "Authorization": authorization_header,
+            "Authorization": f"Bearer {token}",
         }
         payload = {"reason": reason} if reason else None
         request_kwargs = {
-            "params": {"role": "write"},
             "headers": headers,
         }
         if payload is not None:
             headers["Content-Type"] = "application/json"
             request_kwargs["json"] = payload
 
+        timeout = httpx.Timeout(connect=5.0, read=45.0, write=10.0, pool=5.0)
+
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.post(endpoint, **request_kwargs)
 
             if response.status_code != 200:
                 logger.error(
-                    "外部解封接口调用返回异常",
-                    extra={
-                        "user_id": user_id,
-                        "status_code": response.status_code,
-                        "response": response.text,
-                        "payload": payload,
-                        "endpoint": endpoint,
-                        "headers": {k: v for k, v in headers.items() if k.lower() != "authorization"},
-                    },
+                    "外部解封接口返回异常 status=%s body=%s endpoint=%s payload=%s headers=%s token=%s",
+                    response.status_code,
+                    response.text[:500],
+                    endpoint,
+                    payload,
+                    {k: v for k, v in headers.items() if k.lower() != "authorization"},
+                    token,
                 )
                 await self.db.rollback()
                 raise HTTPException(
@@ -641,16 +652,63 @@ class UserService:
             raise
         except Exception as exc:
             logger.exception(
-                "调用外部解封接口失败",
-                extra={
-                    "user_id": user_id,
-                    "payload": payload,
-                    "endpoint": endpoint,
-                    "headers": {k: v for k, v in headers.items() if k.lower() != "authorization"},
-                },
+                "调用外部解封接口失败 endpoint=%s payload=%s headers=%s token=%s",
+                endpoint,
+                payload,
+                {k: v for k, v in headers.items() if k.lower() != "authorization"},
+                token,
             )
             await self.db.rollback()
             raise HTTPException(
                 status_code=502,
                 detail=f"调用外部解封接口失败: {exc}",
             ) from exc
+
+    # ------------------------------------------------------------------ #
+    def generate_superuser_token(
+        self,
+        user_id: str,
+        expires_minutes: int = 60,
+        audience: Optional[str] = None,
+        extra_claims: Optional[dict] = None,
+        secret: Optional[str] = None,
+        algorithm: Optional[str] = None,
+        aud_is_list: bool = True,
+        include_is_superuser: bool = False,
+    ) -> TokenResponse:
+        """
+        生成用于外部封禁/解封接口的超级管理员 JWT。
+
+        - 仅包含 sub/aud/iat/exp，aud 使用列表以兼容 fastapi-users 默认策略
+        - 使用可配置的外部密钥/算法
+        """
+        now = datetime.utcnow()
+        exp = now + timedelta(minutes=expires_minutes)
+        aud_value = audience or "fastapi-users:auth"
+        aud_claim = [aud_value] if (aud_is_list and isinstance(aud_value, str)) else aud_value
+        signing_secret = secret or settings.JWT_SECRET_KEY
+        signing_alg = algorithm or settings.JWT_ALGORITHM
+
+        claims = {
+            "sub": user_id,
+            "aud": aud_claim,
+            "iat": int(now.timestamp()),
+            "exp": int(exp.timestamp()),
+        }
+        if include_is_superuser:
+            claims["is_superuser"] = True
+        if extra_claims:
+            for k, v in extra_claims.items():
+                if k in {"sub", "aud", "iat", "exp"}:
+                    continue
+                claims[k] = v
+
+        token = jwt.encode(
+            claims,
+            signing_secret,
+            algorithm=signing_alg,
+        )
+        if isinstance(token, bytes):
+            token = token.decode("utf-8")
+
+        return TokenResponse(token=token, expires_at=exp, token_type="bearer")

@@ -2,7 +2,7 @@
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from pydantic import AnyUrl, BaseModel, Field
+from pydantic import AnyUrl, BaseModel, Field, model_validator
 from pydantic.config import ConfigDict
 
 
@@ -31,8 +31,16 @@ class StartupModeUpdateRequest(BaseModel):
 class PublishVersionRequest(BaseModel):
     """Publish app build to external mode API."""
 
-    build: str = Field(..., description="Build version string, e.g. 1.2.13")
+    build: Optional[str] = Field(default=None, description="Build version string, e.g. 879")
+    version: Optional[str] = Field(default=None, description="Human readable version string, e.g. 1.2.13")
     os: str = Field(..., description="Target platform, e.g. ios or android")
+
+    @model_validator(mode="after")
+    def validate_source(self) -> "PublishVersionRequest":
+        """确保调用方至少提供 build 或 version 其中之一。"""
+        if not self.build and not self.version:
+            raise ValueError("build 与 version 至少提供一个")
+        return self
 
 
 class AppVersionInfo(BaseModel):

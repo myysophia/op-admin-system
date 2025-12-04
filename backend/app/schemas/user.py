@@ -210,3 +210,11 @@ class BanHistoryListResponse(BaseModel):
     total: int
     page: int
     size: int
+
+
+class TokenResponse(BaseModel):
+    """JWT 生成结果."""
+
+    token: str
+    expires_at: datetime
+    token_type: str = "bearer"

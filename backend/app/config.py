@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
 
+    # External user service token (ban/unban)
+    EXTERNAL_USER_JWT_SECRET: Optional[str] = None
+    EXTERNAL_USER_JWT_AUDIENCE: Optional[str] = "fastapi-users:auth"
+    EXTERNAL_USER_JWT_ALGORITHM: str = "HS256"
+
     # OpenIM
     OPENIM_API_URL: str
     OPENIM_WS_URL: str

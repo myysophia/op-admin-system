@@ -118,10 +118,10 @@ async def publish_version(
     db=Depends(get_db),
 ):
     """
-    Publish app build/version to external mode API.
+    发布 review 版本到外部 Mode API。
 
-    The request body only exposes build and os to clients.
-    Mode is fixed as 'normal' when calling the external API.
+    - 支持直接传 build；若只传 version，则会将 version 直接作为 build 发送。
+    - mode 固定为 normal，不暴露给客户端。
     """
     service = ConfigurationService(db)
     data = await service.publish_version_to_mode_api(payload)

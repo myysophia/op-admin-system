@@ -102,40 +102,24 @@ class ConfigurationService:
         return await self.list_startup_modes(mode="normal")
 
     async def replace_startup_modes_and_push_strict(self, payload: StartupModeUpdateRequest) -> StartupModeListResponse:
-        """覆盖保存 review 页面配置后，同步将所有版本设置为 strict（隐藏 Web3）。"""
-        # 查询当前存量，做增量更新，避免删除记录
-        existing_rows = (await self.db.execute(select(StartupMode))).scalars().all()
-        existing_map = {(row.os, row.build): row for row in existing_rows}
+        """
+        覆盖保存 review 页面配置：不再更新数据库，只调用外部 Mode API。
 
-        new_set = {(item.os, item.build) for item in (payload.items or [])}
-        existing_set = set(existing_map.keys())
-        removed_set = existing_set - new_set
+        - 前端新增/保存：应传入 mode=strict，直接以版本号作为 build 发送。
+        - 前端删除：应传入 mode=normal（同样使用版本号作为 build），用于回滚外部配置。
+        """
 
-        # 提交的版本：设为 strict（新增则插入，已存在则更新）
-        for item in payload.items:
-            key = (item.os, item.build)
-            row = existing_map.get(key)
-            if row:
-                row.mode = "strict"
-            else:
-                self.db.add(StartupMode(os=item.os, build=item.build, mode="strict"))
+        items = payload.items or []
+        strict_items = [item for item in items if item.mode == "strict"]
+        normal_items = [item for item in items if item.mode == "normal"]
 
-        # 删除的版本：保留记录但改为 normal
-        for os_val, build_val in removed_set:
-            row = existing_map.get((os_val, build_val))
-            if row:
-                row.mode = "normal"
+        if strict_items:
+            await self._push_modes_to_external(strict_items, mode="strict")
+        if normal_items:
+            await self._push_modes_to_external(normal_items, mode="normal")
 
-        await self.db.commit()
-
-        # 推送外部：提交的版本 -> strict；被删除的版本 -> normal
-        if payload.items:
-            await self._push_modes_to_external(payload.items, mode="strict")
-        if removed_set:
-            removed_items = [StartupModeUpdateItem(os=os_val, build=build_val, mode="normal") for os_val, build_val in removed_set]
-            await self._push_modes_to_external(removed_items, mode="normal")
-
-        return await self.list_startup_modes(mode="normal")
+        # 不写库，直接回传本次请求的内容
+        return StartupModeListResponse(items=[StartupModeItem(os=item.os, build=item.build, mode=item.mode) for item in items])
 
     async def _push_modes_to_external(self, items: list[StartupModeUpdateItem], mode: str) -> None:
         url = settings.EXTERNAL_MODE_API_URL
@@ -381,9 +365,15 @@ class ConfigurationService:
         if not url:
             raise HTTPException(status_code=500, detail="External mode API URL is not configured")
 
+        target_os = (payload.os or "").lower()
+        build_value = payload.build or payload.version
+
+        if build_value is None:
+            raise HTTPException(status_code=400, detail="Missing build/version to publish")
+
         body = {
-            "build": payload.build,
-            "os": payload.os,
+            "build": str(build_value),
+            "os": target_os,
             "mode": "normal",  # mode is fixed and not exposed to client
         }
 

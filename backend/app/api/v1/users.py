@@ -12,7 +12,8 @@ from app.schemas.user import (
     UserUpdate,
     BanUserRequest,
     UnbanUserRequest,
-    UserSearchParams
+    UserSearchParams,
+    TokenResponse,
 )
 from app.schemas.common import Response
 from app.services.user_service import UserService
@@ -175,3 +176,24 @@ async def unban_user(
     )
 
     return Response(message="User unbanned successfully")
+
+
+@router.post("/users/{uid}/super-token", response_model=Response[TokenResponse], summary="Generate superuser JWT for external ban API")
+async def generate_superuser_token(
+    uid: str = Path(..., description="User ID used as sub"),
+    expires_minutes: int = Query(60, ge=1, le=24 * 60, description="Token lifetime in minutes"),
+    audience: Optional[str] = Query(None, description="Override audience, default fastapi-users:auth"),
+    operator_ctx = Depends(get_operator_context),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    生成指定 user_id 的超级管理员 JWT，用于外部封禁/解封接口调用。
+    """
+    user_service = UserService(db)
+    token = user_service.generate_superuser_token(
+        user_id=uid,
+        expires_minutes=expires_minutes,
+        audience=audience,
+        extra_claims={"operator_name": operator_ctx.operator_name},
+    )
+    return Response(data=token, message="Superuser token generated")
