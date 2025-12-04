@@ -48,8 +48,6 @@ class MemeService:
             filters.append(Pair.base_symbol.ilike(f"%{params.symbol}%"))
         if params.name:
             filters.append(Pair.base_name.ilike(f"%{params.name}%"))
-        if params.creator_name:
-            filters.append(Author.name.ilike(f"%{params.creator_name}%"))
         return filters
 
     async def get_pending_memes(self, params: MemeSearchParams) -> MemeReviewListResponse:
@@ -59,29 +57,36 @@ class MemeService:
         offset = (params.page - 1) * params.page_size
         filters = self._build_filters(params)
 
-        # 总数统计只依赖pair状态与过滤条件
-        count_stmt = select(func.count()).select_from(Pair).where(*filters)
-        total = await self.db.scalar(count_stmt) or 0
-
-        stmt = (
-            select(Pair, Post, Collection)
+        base_query = (
+            select(Pair, Post, Collection, Author)
             .join(Post, Pair.collection_id == Post.id, isouter=True)
             .join(Collection, Collection.id == Post.id, isouter=True)
-            .join(Author, Author.user_id == Pair.creator_id, isouter=True)
+            .join(
+                Author,
+                (Author.user_id == Pair.creator_id) | (Author.id == Pair.creator_id),
+                isouter=True,
+            )
             .where(*filters)
+        )
+
+        if params.creator_name:
+            name_pattern = f"%{params.creator_name}%"
+            base_query = base_query.where(Author.name.ilike(name_pattern))
+
+        count_stmt = select(func.count()).select_from(base_query.subquery())
+        total = await self.db.scalar(count_stmt) or 0
+
+        data_stmt = (
+            base_query
             .order_by(Pair.created_at.desc().nulls_last(), Pair.id.desc())
             .offset(offset)
             .limit(params.page_size)
         )
-        result = await self.db.execute(stmt)
+        result = await self.db.execute(data_stmt)
         rows = result.all()
 
-        creator_ids = {pair.creator_id for pair, _, _ in rows if pair and pair.creator_id}
-        author_map = await self._get_authors_by_user_ids(creator_ids)
-
         items = []
-        for pair, post, collection in rows:
-            creator = author_map.get(pair.creator_id) if pair else None
+        for pair, post, collection, creator in rows:
             created_at = pair.created_at or pair.base_created_at or (post.created_at if post else None)
             avatar = pair.base_image_url or (collection.cover if collection else None) or ""
             social_links = self._normalize_social_links(pair.social_links)
