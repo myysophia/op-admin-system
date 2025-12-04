@@ -1,5 +1,6 @@
 """Meme service - now reading pending items from database tables."""
 from datetime import datetime
+import json
 from sqlalchemy import func, select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import HTTPException
@@ -83,6 +84,7 @@ class MemeService:
             creator = author_map.get(pair.creator_id) if pair else None
             created_at = pair.created_at or pair.base_created_at or (post.created_at if post else None)
             avatar = pair.base_image_url or (collection.cover if collection else None) or ""
+            social_links = self._normalize_social_links(pair.social_links)
             item = MemeReviewListItem(
                 order_id=str(pair.id),
                 user_id=pair.creator_id or "",
@@ -92,7 +94,7 @@ class MemeService:
                 avatar=avatar,
                 about=pair.base_description or "",
                 chain_id=pair.chain,
-                social_links=pair.social_links or {},
+                social_links=social_links,
                 user_region=post.region if post and post.region else "US",
                 holdview_amount=post.holdview_amount if post else None,
                 kafka_timestamp=created_at,
@@ -135,6 +137,7 @@ class MemeService:
 
         created_at = pair.created_at or pair.base_created_at or (post.created_at if post else None)
         avatar = pair.base_image_url or (collection.cover if collection else None) or ""
+        social_links = self._normalize_social_links(pair.social_links)
 
         return {
             "order_id": str(pair.id),
@@ -145,7 +148,7 @@ class MemeService:
             "avatar": avatar,
             "about": pair.base_description,
             "chain_id": pair.chain,
-            "social_links": pair.social_links or {},
+            "social_links": social_links,
             "user_region": post.region if post and post.region else "US",
             "holdview_amount": post.holdview_amount if post else None,
             "created_at": created_at,
@@ -156,6 +159,21 @@ class MemeService:
             "creator_username": creator.username if creator else None,
             "creator_name": creator.name if creator else None,
         }
+
+    def _normalize_social_links(self, value):
+        """社交链接字段兼容字符串/None，返回dict。"""
+        if not value:
+            return {}
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+                return parsed if isinstance(parsed, dict) else {}
+            except Exception:
+                logger.warning("social_links 解析失败，返回空字典", extra={"value": value})
+                return {}
+        return {}
 
     async def review_meme(
         self,
