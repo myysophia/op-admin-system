@@ -434,62 +434,10 @@ class UserService:
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
 
-        # Find active ban
-        active_ban_query = select(Ban).where(
-            and_(
-                Ban.user_id == user_id,
-                Ban.revoked_at.is_(None)
-            )
-        )
-        result = await self.db.execute(active_ban_query)
-        active_bans = result.scalars().all()
-
         resolved_operator_id = self._resolve_operator_id(operator_id)
         resolved_operator_name = await self._resolve_operator_name(resolved_operator_id)
 
         unban_reason = unban_data.reason if unban_data and unban_data.reason else "Unbanned by operator"
-
-        if not active_bans:
-            # Idempotent unban: if user status is banned but no active ban rows, still allow unban to proceed
-            if user.status == "banned":
-                user.status = "active"
-                user.updated_at = datetime.utcnow()
-
-                history_entry = BanHistory(
-                    user_id=user_id,
-                    action="unban",
-                    reason=unban_reason,
-                    duration_seconds=None,
-                    operator_id=resolved_operator_id,
-                    ban_method=None,
-                    operator_name=resolved_operator_name,
-                    created_at=datetime.utcnow(),
-                )
-                self.db.add(history_entry)
-
-                await self._call_external_unban_api(user_id, unban_reason, authorization_header)
-                await self.db.commit()
-
-                await self.audit_service.log_action(
-                    operator_id=resolved_operator_id,
-                    action_type="unban_user",
-                    target_type="user",
-                    target_id=user_id,
-                    action_details={
-                        "reason": unban_reason,
-                        "bans_revoked": 0,
-                        "operator_name": resolved_operator_name,
-                    }
-                )
-                return
-
-            raise HTTPException(status_code=400, detail="User has no active bans")
-
-        # Revoke all active bans
-        for ban in active_bans:
-            ban.revoked_at = datetime.utcnow()
-            ban.revoked_by = resolved_operator_id
-            ban.revoke_reason = unban_reason
 
         history_entry = BanHistory(
             user_id=user_id,
@@ -529,7 +477,7 @@ class UserService:
             target_id=user_id,
             action_details={
                 "reason": unban_reason,
-                "bans_revoked": len(active_bans),
+                "bans_revoked": 0,
                 "operator_name": resolved_operator_name,
             }
         )
@@ -557,6 +505,13 @@ class UserService:
             "reason": ban_data.reason,
             "duration": ban_data.duration or 0,
         }
+
+        logger.info(
+            "外部封禁接口请求开始 endpoint=%s payload=%s headers=%s",
+            endpoint,
+            payload,
+            {k: v for k, v in headers.items() if k.lower() != "authorization"},
+        )
 
         timeout = httpx.Timeout(connect=5.0, read=45.0, write=10.0, pool=5.0)
 
@@ -625,6 +580,13 @@ class UserService:
         if payload is not None:
             headers["Content-Type"] = "application/json"
             request_kwargs["json"] = payload
+
+        logger.info(
+            "外部解封接口请求开始 endpoint=%s payload=%s headers=%s",
+            endpoint,
+            payload,
+            {k: v for k, v in headers.items() if k.lower() != "authorization"},
+        )
 
         timeout = httpx.Timeout(connect=5.0, read=45.0, write=10.0, pool=5.0)
 

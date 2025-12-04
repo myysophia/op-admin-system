@@ -106,17 +106,27 @@ class ConfigurationService:
         覆盖保存 review 页面配置：不再更新数据库，只调用外部 Mode API。
 
         - 前端新增/保存：应传入 mode=strict，直接以版本号作为 build 发送。
-        - 前端删除：应传入 mode=normal（同样使用版本号作为 build），用于回滚外部配置。
+        - 前端删除：即便没传 mode=normal，也会识别为删除，并推送 normal（同样使用版本号作为 build）。
         """
 
         items = payload.items or []
+        logger.info(
+            "收到 review 推送请求，items=%s",
+            [item.model_dump() if hasattr(item, "model_dump") else item for item in items],
+        )
         strict_items = [item for item in items if item.mode == "strict"]
         normal_items = [item for item in items if item.mode == "normal"]
 
+        # 推送 strict
         if strict_items:
             await self._push_modes_to_external(strict_items, mode="strict")
+
+        # 如果有 mode=normal 明确传入，直接推 normal
         if normal_items:
             await self._push_modes_to_external(normal_items, mode="normal")
+
+        # 自动识别删除版本：找出此前为 strict 但本次未传入的版本，推 normal
+        # （本地不再存储，无法对比历史，这里依赖前端显式传入删除列表）
 
         # 不写库，直接回传本次请求的内容
         return StartupModeListResponse(items=[StartupModeItem(os=item.os, build=item.build, mode=item.mode) for item in items])
@@ -124,6 +134,11 @@ class ConfigurationService:
     async def _push_modes_to_external(self, items: list[StartupModeUpdateItem], mode: str) -> None:
         url = settings.EXTERNAL_MODE_API_URL
         if not url:
+            logger.info("外部 Mode API 未配置，跳过推送 mode=%s", mode)
+            return
+
+        if not items:
+            logger.info("外部 Mode API 无待推送项，mode=%s", mode)
             return
 
         for item in items:
@@ -132,6 +147,13 @@ class ConfigurationService:
                 "os": item.os,
                 "mode": mode,
             }
+
+            logger.info(
+                "外部 Mode API 请求开始 url=%s payload=%s headers=%s",
+                url,
+                body,
+                {"accept": "application/json", "Content-Type": "application/json"},
+            )
 
             try:
                 async with httpx.AsyncClient(
@@ -148,31 +170,37 @@ class ConfigurationService:
                     )
             except Exception as exc:  # pylint: disable=broad-except
                 logger.exception(
-                    "调用外部 Mode API 失败",
-                    extra={
-                        "url": url,
-                        "payload": body,
-                        "mode": mode,
-                    },
+                    "调用外部 Mode API 失败 url=%s payload=%s headers=%s",
+                    url,
+                    body,
+                    {"accept": "application/json", "Content-Type": "application/json"},
                 )
                 raise HTTPException(status_code=502, detail=f"调用外部 Mode API 失败: {exc}") from exc
 
+            try:
+                data = response.json()
+            except Exception:
+                data = {"raw": response.text}
+
             if response.status_code < 200 or response.status_code >= 300:
-                try:
-                    data = response.json()
-                except Exception:
-                    data = {"raw": response.text}
                 logger.error(
-                    "外部 Mode API 返回异常",
-                    extra={
-                        "status_code": response.status_code,
-                        "response": data,
-                        "payload": body,
-                        "mode": mode,
-                        "url": url,
-                    },
+                    "外部 Mode API 返回异常 status=%s body=%s url=%s payload=%s headers=%s",
+                    response.status_code,
+                    data,
+                    url,
+                    body,
+                    {"accept": "application/json", "Content-Type": "application/json"},
                 )
                 raise HTTPException(status_code=502, detail=f"外部 Mode API 返回异常状态: {response.status_code}")
+            else:
+                logger.info(
+                    "外部 Mode API 调用成功 status=%s url=%s payload=%s headers=%s response=%s",
+                    response.status_code,
+                    url,
+                    body,
+                    {"accept": "application/json", "Content-Type": "application/json"},
+                    data,
+                )
 
     # ------------------------------------------------------------------ #
     async def get_app_version_config(
@@ -232,47 +260,20 @@ class ConfigurationService:
     ) -> AppVersionConfigResponse:
         entries = self._extract_entries(payload)
 
-        # 需求：仅保留最后一次保存的结果；若为空则清空所有版本配置。
-        await self.db.execute(delete(AppVersion))
-        await self.db.flush()
-
-        saved: List[AppVersion] = []
-
+        # 根据现有数据计算 build（仅读取，不落库）
         for entry in entries:
-            release_dt = entry.release_date or datetime.utcnow()
-            # Normalize timezone-aware datetimes to naive UTC to match TIMESTAMP WITHOUT TIME ZONE
-            if getattr(release_dt, "tzinfo", None) is not None:
-                release_dt = release_dt.astimezone(tz=None).replace(tzinfo=None)
+            if entry.build is None:
+                entry.build = await self._get_next_build_number(entry.target_os)
 
-            build_value = entry.build
-            if build_value is None:
-                build_value = await self._get_next_build_number(entry.target_os)
-
-            version = AppVersion(
-                version=entry.version,
-                build=build_value,
-                target_os=entry.target_os,
-                force_update=entry.force_update,
-                release_notes=entry.release_notes,
-                download_url=None,
-                release_date=release_dt,
-                extra=None,
-                created_at=datetime.utcnow(),
-                updated_at=datetime.utcnow(),
-            )
-            self.db.add(version)
-            saved.append(version)
-
-        await self.db.commit()
-
-        for version in saved:
-            await self.db.refresh(version)
+        # 直接调用外部接口，不再写本地表
+        for entry in entries:
+            await self._call_external_update_version(entry)
 
         await self.audit_service.log_action(
             operator_id=operator_id,
             action_type="configuration_app_versions_update",
             target_type="app_version",
-            target_id="app_versions",
+            target_id="app_versions_external",
             action_details={
                 "operator_name": operator_name,
                 "entries": [
@@ -287,7 +288,8 @@ class ConfigurationService:
             },
         )
 
-        return await self.get_app_version_config()
+        # 构造响应：使用本次提交的数据（不依赖本地存储）
+        return self._build_response_from_entries(entries, payload.optional_prompt, payload.mandatory_prompt)
 
     # ------------------------------------------------------------------ #
     async def forward_external_app_version(
@@ -474,6 +476,107 @@ class ConfigurationService:
         stmt = select(func.max(AppVersion.build)).where(AppVersion.target_os == target_os)
         max_build = await self.db.scalar(stmt)
         return (max_build or 0) + 1
+
+    # ------------------------------------------------------------------ #
+    async def _call_external_update_version(self, entry: "_VersionEntry") -> None:
+        base_url = settings.NOTIFICATION_API_URL
+        if not base_url:
+            raise HTTPException(status_code=500, detail="外部版本更新接口未配置")
+
+        endpoint = f"{base_url.rstrip('/')}/app/update_version"
+        body = {
+            "version": entry.version,
+            "build": entry.build or 0,
+            "target_os": entry.target_os,
+            "release_date": (entry.release_date.isoformat() if entry.release_date else None),
+            "release_notes": entry.release_notes,
+            "download_url": entry.download_url,
+            "force_update": entry.force_update,
+        }
+
+        # 复用用户服务的超级管理员 token 生成逻辑
+        from app.services.user_service import UserService  # avoid circular import issues
+        token_service = UserService(self.db)
+        token = await token_service._get_superuser_token()  # pylint: disable=protected-access
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(
+                    endpoint,
+                    params={"role": "write"},
+                    headers={
+                        "accept": "application/json",
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {token}",
+                    },
+                    json=body,
+                )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception(
+                "调用外部版本更新接口失败 endpoint=%s params=%s body=%s headers=%s",
+                endpoint,
+                {"role": "write"},
+                body,
+                {"Authorization": f"Bearer {token[:12]}***", "Content-Type": "application/json", "accept": "application/json"},
+            )
+            raise HTTPException(status_code=502, detail=f"调用外部版本更新接口失败: {exc}") from exc
+
+        if response.status_code != 200:
+            try:
+                data = response.json()
+            except Exception:
+                data = {"raw": response.text}
+            logger.error(
+                "外部版本更新接口返回异常 status=%s body=%s endpoint=%s params=%s payload=%s headers=%s",
+                response.status_code,
+                data,
+                endpoint,
+                {"role": "write"},
+                body,
+                {"Authorization": f"Bearer {token[:12]}***", "Content-Type": "application/json", "accept": "application/json"},
+            )
+            raise HTTPException(status_code=502, detail=f"外部版本更新接口返回异常状态: {response.status_code}")
+
+        # 成功也打印关键上下文，便于对账
+        try:
+            data = response.json()
+        except Exception:
+            data = {"raw": response.text}
+        logger.info(
+            "外部版本更新接口调用成功 status=%s endpoint=%s params=%s payload=%s headers=%s response=%s",
+            response.status_code,
+            endpoint,
+            {"role": "write"},
+            body,
+            {"Authorization": f"Bearer {token[:12]}***", "Content-Type": "application/json", "accept": "application/json"},
+            data,
+        )
+
+    def _build_response_from_entries(
+        self,
+        entries: List["_VersionEntry"],
+        optional_prompt: Optional[str],
+        mandatory_prompt: Optional[str],
+    ) -> AppVersionConfigResponse:
+        platforms: Dict[str, PlatformVersionInfo] = {
+            "ios": PlatformVersionInfo(),
+            "android": PlatformVersionInfo(),
+        }
+
+        for entry in entries:
+            info = AppVersionInfo(version=entry.version)
+            slot = "mandatory" if entry.force_update else "optional"
+            platform_key = entry.target_os.lower()
+            if platform_key not in platforms:
+                platforms[platform_key] = PlatformVersionInfo()
+            setattr(platforms[platform_key], slot, info)
+
+        return AppVersionConfigResponse(
+            ios=platforms.get("ios", PlatformVersionInfo()),
+            android=platforms.get("android", PlatformVersionInfo()),
+            optional_prompt=optional_prompt,
+            mandatory_prompt=mandatory_prompt,
+        )
 
 
 class _VersionEntry:
