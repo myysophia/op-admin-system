@@ -44,11 +44,12 @@ class NotificationService:
                 "meta": payload_meta
             }
         }
+        endpoint = f"{self.api_url}?role=write"
 
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
-                    f"{self.api_url}?role=write",
+                    endpoint,
                     headers={
                         "accept": "application/json",
                         "Content-Type": "application/json"
@@ -59,47 +60,36 @@ class NotificationService:
 
                 if response.status_code == 200:
                     logger.info(
-                        "Notification sent successfully",
-                        extra={
-                            "notification_type": notification_type,
-                            "recipients": recipients_ids,
-                            "payload": payload
-                        }
+                        "Notification sent successfully status=%s endpoint=%s payload=%s",
+                        response.status_code,
+                        endpoint,
+                        payload,
                     )
                     return True
                 else:
                     logger.error(
-                        "Failed to send notification",
-                        extra={
-                            "notification_type": notification_type,
-                            "recipients": recipients_ids,
-                            "payload": payload,
-                            "status_code": response.status_code,
-                            "response_body": response.text
-                        }
+                        "Failed to send notification status=%s endpoint=%s payload=%s response=%s",
+                        response.status_code,
+                        endpoint,
+                        payload,
+                        response.text[:500],
                     )
                     return False
 
         except httpx.TimeoutException:
             logger.error(
-                "Notification API timeout",
-                extra={
-                    "notification_type": notification_type,
-                    "recipients": recipients_ids,
-                    "payload": payload,
-                    "timeout": self.timeout
-                }
+                "Notification API timeout endpoint=%s payload=%s timeout=%s",
+                endpoint,
+                payload,
+                self.timeout,
             )
             return False
         except Exception as e:
             logger.error(
-                "Error sending notification",
-                extra={
-                    "notification_type": notification_type,
-                    "recipients": recipients_ids,
-                    "payload": payload,
-                    "error": str(e)
-                }
+                "Error sending notification endpoint=%s payload=%s error=%s",
+                endpoint,
+                payload,
+                str(e),
             )
             return False
 
